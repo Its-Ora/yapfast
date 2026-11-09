@@ -37,6 +37,8 @@ export struct ServerRow {
 export struct RoomRow {
     id: string, name: string, heading: string, icon: image, selected: bool, unread: bool, badge: string,
     voice: bool, direct: bool, initial: string, tint: color,
+    /// Fork: a DM group's heading colour; transparent elsewhere.
+    heading-tint: color,
     /// A voice channel with a chat to open.
     chat: bool,
     /// A DM's avatar or group icon, and whether it's a Discord DM.
@@ -156,7 +158,7 @@ export component RailItem inherits Rectangle {
     property <bool> lit: root.selected || pointer.has-hover;
     Rectangle {
         x: 0px; y: (parent.height - self.height) / 2; width: 4px;
-        height: root.selected ? 40px : pointer.has-hover ? 20px : root.unread ? 8px : 0px;
+        height: root.selected ? 40px : pointer.has-hover ? 20px : 0px; // Fork: no unread pill.
         border-top-right-radius: 4px; border-bottom-right-radius: 4px;
         background: Theme.text;
         animate height { duration: 200ms; easing: ease-out; }
@@ -268,7 +270,7 @@ component FolderItem inherits Rectangle {
     forward-focus: focus;
     Rectangle {
         x: 0px; y: (parent.height - self.height) / 2; width: 4px;
-        height: root.open ? 0px : root.selected ? 40px : pointer.has-hover ? 20px : root.unread ? 8px : 0px;
+        height: root.open ? 0px : root.selected ? 40px : pointer.has-hover ? 20px : 0px; // Fork: no unread pill.
         border-top-right-radius: 4px; border-bottom-right-radius: 4px;
         background: Theme.text;
         animate height { duration: 200ms; easing: ease-out; }
@@ -672,6 +674,8 @@ component DropLine inherits Rectangle {
 component CategoryHeading inherits Rectangle {
     in property <string> text;
     in property <bool> collapsed;
+    /// Fork: a DM group's colour, which its heading takes.
+    in property <color> tint: transparent;
     /// It may be dragged, as ChannelRow may.
     in property <bool> draggable;
     callback start-drag(length) -> bool;
@@ -692,9 +696,14 @@ component CategoryHeading inherits Rectangle {
     /// pointer is over it.
     in property <bool> can-create;
     callback create;
-    property <color> ink: touch.has-hover ? Theme.secondary : Theme.muted;
+    property <color> ink: root.tint != transparent ? (touch.has-hover ? root.tint.brighter(0.2) : root.tint)
+        : touch.has-hover ? Theme.secondary : Theme.muted;
     HorizontalLayout {
         padding-left: 16px; padding-right: 8px; padding-top: 17px; spacing: 4px;
+        if root.tint != transparent: Rectangle {
+            width: 8px;
+            Rectangle { width: 8px; height: 8px; border-radius: 4px; background: root.tint; }
+        }
         Text {
             text: root.text; color: root.ink; font-size: 14px; font-weight: 600; letter-spacing: 0px;
             vertical-alignment: center; overflow: elide; horizontal-stretch: 0;
@@ -1142,11 +1151,11 @@ export component RoomList inherits Rectangle {
                     }
                 }
                 if room.heading != "" && !(room.pinned && !room.direct): CategoryHeading {
-                    text: room.heading; collapsed: room.collapsed;
+                    text: room.heading; collapsed: room.collapsed; tint: room.heading-tint;
                     can-create: root.may-create(room.id);
                     create => { root.create-channel(room.id); }
                     toggled => { root.toggle-category(room.category); }
-                    context-menu(x, y) => { root.open-category-menu(room.id, x, y); }
+                    context-menu(x, y) => { root.open-category-menu(room.direct ? room.category : room.id, x, y); }
                     draggable: room.heading-place > 0; tracking: root.arranging > 0;
                     start-drag(y) => { return root.begin(room.heading-place, room, true, y); }
                     dragged(y) => { root.drag-y = y; }

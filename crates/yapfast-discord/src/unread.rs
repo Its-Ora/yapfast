@@ -317,24 +317,54 @@ impl Unreads {
         if thread.is_some_and(|thread| !thread.joined) {
             return self.mentions_me(guild, message, me, roles.get(guild));
         }
-        let settings = self.settings.get(guild);
-        let default = self.default_levels.get(guild).copied().unwrap_or_default();
-        let level = thread.and_then(|thread| thread.level).unwrap_or_else(|| {
-            settings.map_or(default, |settings| settings.level(place, category, default))
-        });
-        let muted = thread.is_some_and(|thread| thread.mute.active(now))
-            || settings.is_some_and(|settings| {
-                settings.mute.active(now)
-                    || [Some(place), category]
-                        .into_iter()
-                        .flatten()
-                        .any(|place| settings.channel_muted(place, now))
-            });
-        match level {
-            Level::Nothing => false,
-            Level::All if !muted => true,
-            _ => self.mentions_me(guild, message, me, roles.get(guild)),
+        // Fork: in a server only a message naming this account notifies,
+        // whatever the server's or channel's level; every other message stays
+        // quiet, as do @everyone, @here and role mentions (see `mentions_me`).
+        let _ = (place, category, Level::All);
+        self.mentions_me(guild, message, me, roles.get(guild))
+    }
+
+    /// Fork: recounts the servers' mentions from Discord's recent mentions
+    /// of this account by name (`GET /users/@me/mentions` with
+    /// `everyone=false&roles=false`), since READY's `mention_count` also
+    /// counts @everyone, @here and role mentions. A server channel counts
+    /// those of its messages newer than it was read; `private` tells DMs
+    /// apart, which keep Discord's count. Returns whether anything changed.
+    pub fn recount_direct(&mut self, mentions: &Value, private: impl Fn(&str) -> bool) -> bool {
+        let mut counted: HashMap<&str, (&str, u64)> = HashMap::new();
+        for message in mentions.as_array().into_iter().flatten() {
+            let (Some(channel), Some(guild), Some(id)) = (
+                message["channel_id"].as_str(),
+                message["guild_id"].as_str(),
+                snowflake(&message["id"]),
+            ) else {
+                continue;
+            };
+            if private(channel) {
+                continue;
+            }
+            if id > self.read_state(guild, channel).last {
+                counted.entry(channel).or_insert((guild, 0)).1 += 1;
+            }
         }
+        let mut changed = false;
+        for (channel, read) in &mut self.reads {
+            if private(channel) || counted.contains_key(channel.as_str()) {
+                continue;
+            }
+            if read.mentions != 0 {
+                read.mentions = 0;
+                changed = true;
+            }
+        }
+        for (channel, (guild, count)) in counted {
+            let read = self.read(guild, channel);
+            if read.mentions != count {
+                read.mentions = count;
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Whether a guild message pings this account, respecting its settings.
@@ -345,19 +375,14 @@ impl Unreads {
         me: &str,
         roles: Option<&Vec<String>>,
     ) -> bool {
-        let settings = self.settings.get(guild);
-        let mentions = message["mentions"].as_array().into_iter().flatten();
-        let user = mentions.clone().any(|user| user["id"] == me);
-        let everyone = message["mention_everyone"].as_bool().unwrap_or(false)
-            && !settings.is_some_and(|settings| settings.suppress_everyone);
-        let role = !settings.is_some_and(|settings| settings.suppress_roles)
-            && message["mention_roles"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .any(|role| roles.is_some_and(|roles| roles.iter().any(|mine| mine == role)));
-        user || everyone || role
+        // Fork: only a mention of this account by name pings it; @everyone,
+        // @here and role mentions neither count nor notify.
+        let _ = (guild, roles);
+        message["mentions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|user| user["id"] == me)
     }
 
     fn read(&mut self, guild: &str, channel: &str) -> &mut Read {
@@ -512,10 +537,13 @@ mod tests {
             unreads.notifies(message, "1", &roles, place, category, None)
         };
         let ping = json!({"mentions": [{"id": "1"}]});
-        // The server's default: every message.
-        assert!(notifies(&message(Some("10"), "11", json!({})), None));
-        // A channel set to nothing stays quiet, even for a mention.
-        assert!(!notifies(&message(Some("10"), "12", ping.clone()), None));
+        // Fork: in a server only a mention by name notifies, whatever the level.
+        assert!(!notifies(&message(Some("10"), "11", json!({})), None));
+        assert!(notifies(&message(Some("10"), "12", ping.clone()), None));
+        assert!(!notifies(
+            &message(Some("10"), "11", json!({"mention_everyone": true})),
+            None
+        ));
         // A muted category leaves mentions only.
         assert!(!notifies(&message(Some("10"), "13", json!({})), Some("4")));
         assert!(notifies(
@@ -622,8 +650,8 @@ mod tests {
         );
         assert_eq!(
             state(&unreads, &mut server)[0],
-            (true, 2),
-            "@everyone is suppressed"
+            (true, 1),
+            "Fork: only the mention by name counts"
         );
         assert!(
             !unreads.apply(
@@ -665,5 +693,35 @@ mod tests {
             &roles,
         );
         assert_eq!(state(&unreads, &mut server)[1..3], [(false, 0), (false, 0)]);
+    }
+
+    #[test]
+    fn recounts_server_mentions_by_name_only() {
+        let ready = json!({
+            "guilds": [{"id": "10", "properties": {"name": "Test"}, "channels": [
+                {"id": "11", "type": 0, "last_message_id": "900"},
+                {"id": "12", "type": 0, "last_message_id": "900"},
+            ]}],
+            "read_state": {"entries": [
+                {"id": "11", "last_message_id": "500", "mention_count": 3},
+                {"id": "12", "last_message_id": "500", "mention_count": 2},
+                {"id": "40", "last_message_id": "500", "mention_count": 4},
+            ]},
+        });
+        let mut unreads = Unreads::from_ready(&ready);
+        let found = json!([
+            {"id": "600", "channel_id": "11", "guild_id": "10"},
+            {"id": "400", "channel_id": "11", "guild_id": "10"},
+        ]);
+        assert!(unreads.recount_direct(&found, |channel| channel == "40"));
+        let mut server = ready::servers(&ready).remove(0);
+        let mentions: Vec<_> = server
+            .text_channels
+            .iter_mut()
+            .map(|channel| unreads.channel("10", channel, ready::Access::Join).2)
+            .collect();
+        assert_eq!(mentions, [1, 0]);
+        assert_eq!(unreads.private_marks("40").2, 4);
+        assert!(!unreads.recount_direct(&found, |channel| channel == "40"));
     }
 }

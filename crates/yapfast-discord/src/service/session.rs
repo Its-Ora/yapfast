@@ -254,6 +254,7 @@ async fn connected_session(
         streams: StreamOpenings::new(),
         searches: MemberSearches::default(),
         previews: mpsc::unbounded_channel(),
+        mentions: mpsc::unbounded_channel(),
     };
     if let Err(error) = session.connect().await {
         return Ended::Failed(error);
@@ -301,6 +302,9 @@ struct Session<'a> {
     away_changes: Pin<Box<Sleep>>,
     /// Discord's answers when asked for message requests' latest messages.
     previews: (mpsc::UnboundedSender<Value>, mpsc::UnboundedReceiver<Value>),
+    /// Fork: Discord's recent mentions of this account by name, which
+    /// recount the servers' mentions after READY.
+    mentions: (mpsc::UnboundedSender<Value>, mpsc::UnboundedReceiver<Value>),
 }
 
 impl Session<'_> {
@@ -309,6 +313,15 @@ impl Session<'_> {
         self.show_presence().await?;
         self.shared.lists.publish_group(&self.tracker);
         self.ask_previews();
+        let (api, found) = (self.shared.api.clone(), self.mentions.0.clone());
+        tokio::spawn(async move {
+            match api.direct_mentions().await {
+                Ok(answer) => {
+                    let _ = found.send(answer);
+                }
+                Err(error) => tracing::debug!(%error, "recent mentions unavailable"),
+            }
+        });
         self.shared
             .lists
             .connect(&self.tracker, &mut self.gateway)
@@ -353,6 +366,12 @@ impl Session<'_> {
                 () = self.shared.lists.went_stale(), if self.shared.lists.unsent() => {
                     // The list on screen went stale without Discord sending it.
                     self.shared.lists.refresh(&mut self.gateway).await
+                }
+                Some(found) = self.mentions.1.recv() => {
+                    if self.tracker.recount_mentions(&found) {
+                        self.publisher.changed();
+                    }
+                    Ok(())
                 }
                 Some(found) = self.previews.1.recv() => {
                     if self.tracker.put_previews(&found) {

@@ -1460,6 +1460,8 @@ export component DiscordSettings inherits VerticalLayout {
     callback unblock(string);
     /// How many of them show; Discord's list shows five more at a time.
     private property <int> blocked-shown: 5;
+    // Fork: the list stays folded until asked for, so the switches above stay in view.
+    private property <bool> blocked-open: false;
     callback hide-blocked-toggled(bool);
     callback show-hidden-channels-toggled(bool);
     callback sync-discord-reads-toggled(bool);
@@ -1514,8 +1516,15 @@ export component DiscordSettings inherits VerticalLayout {
                 Text { text: "Blocked accounts"; color: Theme.text; font-size: 16px; font-weight: 600; }
                 Text { text: root.blocked.length + (root.blocked.length == 1 ? " account" : " accounts"); color: Theme.secondary; font-size: 14px; }
             }
+            Rectangle { horizontal-stretch: 1; }
+            Middle {
+                ActionButton {
+                    text: root.blocked-open ? "Hide blocked accounts" : "See blocked accounts"; small: true;
+                    clicked => { root.blocked-open = !root.blocked-open; root.blocked-shown = 5; }
+                }
+            }
         }
-        VerticalLayout {
+        if root.blocked-open: VerticalLayout {
             for person[index] in root.blocked: VerticalLayout {
                 if index < root.blocked-shown: HorizontalLayout {
                     padding-top: 6px; padding-bottom: 6px; spacing: 12px;
@@ -1537,7 +1546,7 @@ export component DiscordSettings inherits VerticalLayout {
                 }
             }
         }
-        if root.blocked.length > root.blocked-shown: HorizontalLayout {
+        if root.blocked-open && root.blocked.length > root.blocked-shown: HorizontalLayout {
             alignment: start;
             ActionButton {
                 text: "See " + (root.blocked.length - root.blocked-shown) + " more"; ghost: true; small: true;

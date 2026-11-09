@@ -1293,6 +1293,31 @@ pub struct EmojiSet {
 /// `text` with each `:name:` of a usable custom emoji, outside code, in Discord's
 /// form, `<:name:id>`. The first emoji of a name wins.
 pub fn wire_emoji(text: &str, usable: &[CustomEmoji]) -> String {
+    replace_emoji(text, usable, |emoji, name| {
+        let animated = if emoji.animated { "a" } else { "" };
+        format!("<{animated}:{name}:{}>", emoji.id)
+    })
+}
+
+/// Fork: `text` with each `:name:` still left of `emoji`, outside code, as a
+/// link to its picture at 48 pixels, which Discord shows as an image, as
+/// BetterDiscord's FakeNitro sends it. Runs after [`wire_emoji`], so only the
+/// emoji this account may not use are left.
+pub fn link_emoji(text: &str, emoji: &[CustomEmoji]) -> String {
+    replace_emoji(text, emoji, |emoji, name| {
+        let kind = if emoji.animated { "gif" } else { "webp" };
+        format!(
+            "https://cdn.discordapp.com/emojis/{}.{kind}?size=48&quality=lossless&name={name}",
+            emoji.id
+        )
+    })
+}
+
+fn replace_emoji(
+    text: &str,
+    usable: &[CustomEmoji],
+    wired: impl Fn(&CustomEmoji, &str) -> String,
+) -> String {
     let mut out = String::with_capacity(text.len());
     let mut code = false;
     let mut rest = text;
@@ -1312,8 +1337,7 @@ pub fn wire_emoji(text: &str, usable: &[CustomEmoji]) -> String {
                 .iter()
                 .find(|emoji| emoji.text[1..emoji.text.len() - 1] == *name)
         {
-            let animated = if emoji.animated { "a" } else { "" };
-            out.push_str(&format!("<{animated}:{name}:{}>", emoji.id));
+            out.push_str(&wired(emoji, name));
             rest = &rest[end + 2..];
             continue;
         }

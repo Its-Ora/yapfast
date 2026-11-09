@@ -83,6 +83,10 @@ pub(super) fn menu(adapter: &Adapter, id: &str, person: bool) -> Menu {
     if let Some(server) = id.strip_prefix(EVENTS) {
         return events(adapter, server);
     }
+    // Fork: a DM group's heading.
+    if id.starts_with(dm_groups::GROUP) {
+        return (dm_groups::heading_menu(), vec![]);
+    }
     let icons = &adapter.icons;
     let app = &adapter.app;
     let state = &app.state;
@@ -326,6 +330,26 @@ pub(super) fn menu(adapter: &Adapter, id: &str, person: bool) -> Menu {
             notify.dress(adapter, row);
         }
     }
+    // Fork: a DM's menu moves it into a group.
+    let dm = !person
+        && plain
+        && !id_is_header
+        && state
+            .rooms
+            .iter()
+            .any(|found| found.id == id && found.direct);
+    let mut groups = None;
+    if dm {
+        let (row, submenu) = dm_groups::menu_rows(&adapter.layout.dm_groups, id);
+        let at = rows
+            .iter()
+            .position(|row| {
+                row.id == choice_id(MenuChoice::Pin) || row.id == choice_id(MenuChoice::Unpin)
+            })
+            .map_or(rows.len(), |at| at + 1);
+        rows.insert(at, row);
+        groups = Some(submenu);
+    }
     let submenus = rows
         .iter()
         .map(|row| {
@@ -342,6 +366,8 @@ pub(super) fn menu(adapter: &Adapter, id: &str, person: bool) -> Menu {
                 (row.id == choice_id(MenuChoice::MoveTo), in_voice)
             {
                 move_rows(app, room, user)
+            } else if row.id == dm_groups::MOVE {
+                groups.clone().unwrap_or_default()
             } else if let Some(notify) = &notify {
                 notify.submenu(&row.id)
             } else {
@@ -816,6 +842,10 @@ pub(super) fn choose(
 ) {
     // The events popout only lists them.
     if target.starts_with(EVENTS) {
+        return;
+    }
+    // Fork: the DM groups' choices.
+    if dm_groups::choose(adapter, window, &target, id) {
         return;
     }
     // A checkbox shows its new state at once, as the menu stays open.

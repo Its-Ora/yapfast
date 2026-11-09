@@ -434,9 +434,13 @@ export component VoiceDock inherits Rectangle {
                         }
                     }
                 }
-                LinkTouch {
+                // Fork: "Voice connected" itself opens the call's channel too; the
+                // signal icon beside it still shows the connection's details.
+                TouchArea {
                     y: status-text.y + status-row.y; height: status-row.height;
-                    open(x, y, width, height) => { root.open-call-link(x, y, width, height); }
+                    enabled: root.voice-active;
+                    mouse-cursor: root.voice-active ? MouseCursor.pointer : MouseCursor.default;
+                    clicked => { root.open-call(); }
                 }
             }
             // Beside leaving, as in Vesktop. Off shows red, so it isn't forgotten.

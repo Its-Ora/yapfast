@@ -1048,6 +1048,10 @@ pub(super) fn bind_callbacks(window: &YapfastWindow, adapter: &Rc<RefCell<Adapte
         let adapter = adapter.clone();
         // An empty category's heading names the category itself.
         window.on_category_of(move |room| {
+            // Fork: a DM group's heading names its group.
+            if room.starts_with(dm_groups::GROUP) {
+                return room;
+            }
             let app = &adapter.borrow().app;
             app.category_of(&room)
                 .or_else(|| app.state.is_category(&room).then(|| room.to_string()))
@@ -2537,11 +2541,40 @@ pub(super) fn bind_callbacks(window: &YapfastWindow, adapter: &Rc<RefCell<Adapte
     });
     let state = adapter.clone();
     let weak = window.as_weak();
+    {
+        let state = adapter.clone();
+        let weak = window.as_weak();
+        window.on_group_dialog_save(move |name, color| {
+            if let Some(window) = weak.upgrade() {
+                let color = usize::try_from(color).unwrap_or_default();
+                dm_groups::save(&mut state.borrow_mut(), &window, &name, color);
+            }
+        });
+        let state = adapter.clone();
+        let weak = window.as_weak();
+        window.on_group_dialog_close(move || {
+            if let Some(window) = weak.upgrade() {
+                window.set_group_dialog_open(false);
+                state.borrow_mut().group_editing = None;
+            }
+        });
+    }
     window.on_select_room(move |id| {
         if let Some(window) = weak.upgrade() {
-            state
-                .borrow_mut()
-                .action(&window, Action::SelectRoom(id.into()));
+            let mut adapter = state.borrow_mut();
+            // Fork: a server a DM search found opens it.
+            if adapter
+                .app
+                .state
+                .servers
+                .iter()
+                .any(|server| server.id == id.as_str())
+            {
+                window.set_filter(SharedString::default());
+                adapter.action(&window, Action::Navigate(Navigation::Server(id.into())));
+                return;
+            }
+            adapter.action(&window, Action::SelectRoom(id.into()));
         }
     });
     for aside in [false, true] {
@@ -2687,6 +2720,10 @@ pub(super) fn bind_callbacks(window: &YapfastWindow, adapter: &Rc<RefCell<Adapte
     window.on_toggle_category(move |category| {
         let Some(window) = weak.upgrade() else { return };
         let mut adapter = state.borrow_mut();
+        // Fork: a DM group's heading folds the group.
+        if dm_groups::toggle(&mut adapter, &window, &category) {
+            return;
+        }
         let Navigation::Server(server) = adapter.app.state.navigation.clone() else {
             return;
         };

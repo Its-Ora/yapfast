@@ -1141,6 +1141,11 @@ impl Adapter {
                 }
             })
             .collect();
+        // Fork: the DM list's groups, and the servers a search finds.
+        if direct {
+            rows = dm_groups::arrange(rows, &self.layout.dm_groups, !query.trim().is_empty());
+            rows.extend(dm_groups::servers(state, &query));
+        }
         // A channel's threads follow it, so a thread's line runs on to the
         // next row when that's a thread too.
         for index in 1..rows.len() {

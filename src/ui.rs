@@ -43,6 +43,7 @@ mod call_link;
 mod call_timer;
 mod callbacks;
 mod channel_settings;
+mod dm_groups;
 mod emoji_animation;
 mod emoji_grid;
 mod games;
@@ -1168,6 +1169,8 @@ struct Layout {
     game_executables: Vec<(String, String)>,
     /// Messages from people this account blocked don't show at all.
     hide_blocked: bool,
+    /// Fork: the DM list's groups; see [`dm_groups`].
+    dm_groups: Vec<dm_groups::DmGroup>,
     /// A call from someone's menu starts without asking first.
     skip_call_prompt: bool,
     /// The member list's Activity panel shows only its header.
@@ -1942,6 +1945,8 @@ struct Adapter {
     /// A hash of what the friends picker's rows were built from, so they're
     /// built again only once that changes.
     picker_shown: Option<u64>,
+    /// Fork: what the DM group dialog is open for.
+    group_editing: Option<dm_groups::Editing>,
     /// The same for the list of threads, and the minute it was built in,
     /// as its rows say how long ago each was active.
     threads_shown: Option<u64>,
@@ -2289,6 +2294,7 @@ impl Adapter {
                 arranging: None,
                 rail_call: None,
                 picker_shown: None,
+                group_editing: None,
                 threads_shown: None,
                 forum_shown: None,
                 topic_shown: None,

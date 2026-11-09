@@ -1045,6 +1045,14 @@ impl Tracker {
 
     /// Takes in Discord's supplemental data for message requests,
     /// `[{channel_id, message_preview}]`; returns whether a preview changed.
+    /// Fork: recounts the servers' mentions from Discord's recent mentions
+    /// of this account by name; see [`Unreads::recount_direct`].
+    pub(super) fn recount_mentions(&mut self, found: &Value) -> bool {
+        let private = &self.private;
+        self.unreads
+            .recount_direct(found, |channel| private.iter().any(|dm| dm.id == channel))
+    }
+
     pub(super) fn put_previews(&mut self, found: &Value) -> bool {
         let mut changed = false;
         for entry in found.as_array().into_iter().flatten() {

@@ -223,12 +223,21 @@ impl Application {
         } else {
             let wired = mention::wire(&text, &self.state.mention_candidates());
             if Network::of(&id) == Network::Discord {
-                let usable: Vec<chat::CustomEmoji> = self
-                    .usable_emoji()
+                // Fork: emoji this account may use go as Discord's own; the
+                // rest, from other servers or animated without Nitro, as links
+                // to their pictures, which Discord shows as images.
+                let native: Vec<chat::CustomEmoji> = self
+                    .emoji_sets_as(false)
+                    .into_iter()
+                    .flat_map(|set| set.emoji)
+                    .filter(|emoji| emoji.usable)
+                    .collect();
+                let all: Vec<chat::CustomEmoji> = self
+                    .emoji_sets()
                     .into_iter()
                     .flat_map(|set| set.emoji)
                     .collect();
-                chat::wire_emoji(&wired, &usable)
+                chat::link_emoji(&chat::wire_emoji(&wired, &native), &all)
             } else {
                 wired
             }

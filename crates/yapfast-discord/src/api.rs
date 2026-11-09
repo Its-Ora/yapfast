@@ -698,6 +698,16 @@ impl Api {
 
     /// The message that each of up to 25 message requests is waiting with,
     /// as Discord's requests list shows it: `[{channel_id, message_preview}]`.
+    /// Fork: the latest messages that mention this account by name, without
+    /// @everyone, @here or role mentions, newest first; at most 100.
+    pub async fn direct_mentions(&self) -> Result<Value> {
+        self.json(self.request(
+            Method::GET,
+            "/users/@me/mentions?limit=100&roles=false&everyone=false",
+        ))
+        .await
+    }
+
     pub async fn request_previews(&self, channels: &[String]) -> Result<Value> {
         let query: Vec<_> = channels
             .iter()

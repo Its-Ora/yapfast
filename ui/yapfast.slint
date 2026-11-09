@@ -138,6 +138,15 @@ export component YapfastWindow inherits Window {
     // the answer.
     in property <bool> person-open;
     in property <PersonPrompt> person-prompt;
+    // Fork: the dialog that makes or edits a DM group: its name and colour,
+    // by index into the colours it offers.
+    in-out property <bool> group-dialog-open;
+    in property <bool> group-dialog-new;
+    in-out property <string> group-dialog-name;
+    in-out property <int> group-dialog-color;
+    in property <[color]> group-dialog-colors;
+    callback group-dialog-save(string, int);
+    callback group-dialog-close;
     in-out property <string> person-text;
     callback answer-person(string);
     callback choose-person-option(int);
@@ -1524,7 +1533,7 @@ export component YapfastWindow inherits Window {
         || root.channel-open || root.move-sync-open || root.leave-open || root.person-open
         || root.status-open || root.poll-open || root.new-dm-open || root.reactions-open
         || root.forward-open || root.leaving-link != "" || root.switch-prompt != ""
-        || root.confirm-delete != "" || root.incoming-open;
+        || root.confirm-delete != "" || root.incoming-open || root.group-dialog-open;
     // The channel has no composer here: a call, a forum, a message request, the
     // friends list, the friend requests or Browse Channels.
     property <bool> composer-missing: !root.room-selected || root.voice-panel || root.room-forum
@@ -3385,6 +3394,23 @@ export component YapfastWindow inherits Window {
                                 x: 16px; width: parent.width - 32px; y: parent.height - self.height - 8px;
                                 jump => { root.jump-to-present(); }
                             }
+                            // Fork: scrolled up through the newest messages, a round button
+                            // brings the list back to the end in one click.
+                            if root.room-selected && !root.detached && !root.requests-open && !root.friends-open
+                                && !root.follow-latest
+                                && timeline.content-y - min(0px, timeline.height - timeline.content-height) > 600px: Rectangle {
+                                width: 40px; height: 40px; border-radius: 20px;
+                                x: parent.width - self.width - 20px; y: parent.height - self.height - 16px;
+                                background: bottom-touch.has-hover ? Theme.accent-hover : Theme.accent;
+                                drop-shadow-blur: 12px; drop-shadow-color: #00000060; drop-shadow-offset-y: 4px;
+                                accessible-role: button; accessible-label: "Jump to the newest message";
+                                accessible-action-default => { root.scroll-to-latest(); }
+                                Image {
+                                    source: @image-url("icons/chevron-down.svg"); width: 20px; height: 20px;
+                                    colorize: Theme.on-accent;
+                                }
+                                bottom-touch := TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.scroll-to-latest(); } }
+                            }
                             if root.requests-open: RequestsScreen {
                                 width: parent.width; height: parent.height;
                                 incoming: root.requests-incoming;
@@ -4497,6 +4523,63 @@ export component YapfastWindow inherits Window {
         answer(text) => { root.answer-person(text); }
         choose(index) => { root.choose-person-option(index); }
         close => { root.close-person(); }
+    }
+    // Fork: a DM group's name and colour.
+    group-motion := PopupMotion { open: root.group-dialog-open; }
+    if group-motion.shown: Rectangle {
+        background: rgba(0, 0, 0, 0.6 * group-motion.amount);
+        TouchArea { clicked => { root.group-dialog-close(); } }
+        Rectangle {
+            opacity: Popup.opacity(group-motion.amount); transform-scale: Popup.scale(group-motion.amount);
+            width: min(400px, root.width - 48px); height: group-content.preferred-height;
+            background: Theme.raised; border-color: Theme.edge; border-width: 1px; border-radius: 12px;
+            drop-shadow-blur: 32px; drop-shadow-color: #00000066; drop-shadow-offset-y: 12px;
+            accessible-role: groupbox;
+            accessible-label: root.group-dialog-new ? "New group" : "Edit group";
+            TouchArea { }
+            FocusScope {
+                key-pressed(event) => {
+                    if event.text == Key.Escape { root.group-dialog-close(); return accept; }
+                    return reject;
+                }
+                group-content := VerticalLayout {
+                    padding: 20px; spacing: 14px;
+                    HorizontalLayout {
+                        Text {
+                            text: root.group-dialog-new ? "New group" : "Edit group";
+                            color: Theme.text; font-size: 18px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1;
+                        }
+                        IconButton { icon: @image-url("icons/x.svg"); label: "Close"; size: 28px; glyph: 18px; clicked => { root.group-dialog-close(); } }
+                    }
+                    TextField {
+                        init => { self.focus-input(); }
+                        min-height: 36px; text-size: 15px; pad: 10px; fill: Theme.sunken;
+                        placeholder: "Group name"; label: "Group name";
+                        text <=> root.group-dialog-name;
+                        accepted => { root.group-dialog-save(root.group-dialog-name, root.group-dialog-color); }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px; alignment: start;
+                        for swatch[index] in root.group-dialog-colors: Rectangle {
+                            width: 28px; height: 28px; border-radius: 14px; background: swatch;
+                            border-width: index == root.group-dialog-color ? 3px : 0px; border-color: Theme.text;
+                            accessible-role: button; accessible-label: "Colour " + (index + 1);
+                            accessible-action-default => { root.group-dialog-color = index; }
+                            TouchArea { mouse-cursor: MouseCursor.pointer; clicked => { root.group-dialog-color = index; } }
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: end; spacing: 8px;
+                        ActionButton { text: "Cancel"; ghost: true; clicked => { root.group-dialog-close(); } }
+                        ActionButton {
+                            text: root.group-dialog-new ? "Create" : "Save"; primary: true;
+                            enabled: root.group-dialog-name != "";
+                            clicked => { root.group-dialog-save(root.group-dialog-name, root.group-dialog-color); }
+                        }
+                    }
+                }
+            }
+        }
     }
     // The custom status; see StatusDialog.
     status-motion := PopupMotion { open: root.status-open; }

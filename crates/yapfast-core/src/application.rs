@@ -2696,6 +2696,10 @@ fn shelved(messages: &[Arc<ChatMessage>]) -> Vec<Arc<ChatMessage>> {
     kept
 }
 
+/// Fork: every custom emoji is usable, those this account may not use sent
+/// as links to their pictures.
+const UNLOCKED_EMOJI: bool = true;
+
 impl Application {
     pub fn dispatch(&mut self, action: Action) -> Vec<Effect> {
         // A keystroke in the composer shows no picture that wasn't on screen.
@@ -4454,6 +4458,13 @@ impl Application {
     /// not use greyed as Discord's does; everything else uses
     /// [`Application::usable_emoji`].
     pub fn emoji_sets(&self) -> Vec<chat::EmojiSet> {
+        self.emoji_sets_as(UNLOCKED_EMOJI)
+    }
+
+    /// Fork: [`Application::emoji_sets`], with every emoji usable when
+    /// `unlocked`: sending one this account may not use goes as its picture's
+    /// link instead (see [`chat::link_emoji`]). Locked, they're as Discord has them.
+    pub fn emoji_sets_as(&self, unlocked: bool) -> Vec<chat::EmojiSet> {
         #[cfg(feature = "discord")]
         if let Some(snapshot) = &self.discord {
             let here = self
@@ -4487,11 +4498,12 @@ impl Application {
                                 text: format!(":{}:", emoji.name),
                                 id: emoji.id.clone(),
                                 animated: emoji.animated,
-                                usable: if ours {
-                                    nitro || !emoji.animated
-                                } else {
-                                    external
-                                },
+                                usable: unlocked
+                                    || if ours {
+                                        nitro || !emoji.animated
+                                    } else {
+                                        external
+                                    },
                                 picture: yapfast_discord::ready::custom_emoji(
                                     &emoji.id,
                                     emoji.animated,
@@ -4557,7 +4569,10 @@ impl Application {
                         .emojis
                         .iter()
                         .filter(|emoji| emoji.available && ids.contains(emoji.id.as_str()))
-                        .map(move |emoji| (emoji, nitro || (ours && !emoji.animated)))
+                        // Fork: every emoji is usable; see `emoji_sets_as`.
+                        .map(move |emoji| {
+                            (emoji, UNLOCKED_EMOJI || nitro || (ours && !emoji.animated))
+                        })
                 })
                 .map(|(emoji, usable)| chat::CustomEmoji {
                     text: format!(":{}:", emoji.name),
