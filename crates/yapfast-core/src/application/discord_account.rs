@@ -537,6 +537,20 @@ impl Application {
                 started_ms: playing.started_ms,
             });
         }
+        // Fork: what Spotify plays.
+        let spotify = snapshot.spotify.as_deref().map(|now| chat::Spotify {
+            title: now.title.clone(),
+            artists: now.artists.replace("; ", ", "),
+            album: now.album.clone(),
+            cover_url: now.cover_url.clone(),
+            duration_ms: now.duration_ms,
+            progress_ms: now.progress_ms,
+            at_ms: now.at_ms,
+            playing: now.playing,
+        });
+        if self.state.discord_spotify != spotify {
+            self.state.discord_spotify = spotify;
+        }
         if changed(|a, b| Arc::ptr_eq(&a.friend_requests, &b.friend_requests)) {
             self.state.friend_requests = snapshot
                 .friend_requests
@@ -676,6 +690,7 @@ impl Application {
         self.state.custom_status = None;
         self.state.discord_show_game = false;
         self.state.discord_playing = None;
+        self.state.discord_spotify = None;
         self.state.join_sounds.clear();
         self.state.sound_catalog = None;
         self.show_lists()

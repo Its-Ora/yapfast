@@ -44,6 +44,8 @@ pub(super) struct Shared {
     pub(super) presence: Value,
     /// The game this account plays, as Rich Presence or detection says.
     pub(super) activity: watch::Receiver<Option<Arc<Value>>>,
+    /// Fork: what the linked Spotify account plays.
+    pub(super) spotify: watch::Receiver<Option<Arc<crate::spotify::SpotifyNow>>>,
     /// Whether the account shares it, which runs or stops what finds it.
     pub(super) show_game: watch::Sender<bool>,
     /// Nobody has used Yapfast since then, in Unix milliseconds, and whether
@@ -84,6 +86,12 @@ pub(super) async fn run(
                 &mut shared.presence,
                 shared.activity.borrow().as_deref().filter(|_| playing),
             );
+            // Fork: and what Spotify plays, as its own activity.
+            let listening = shared.spotify.borrow().as_ref().and_then(|now| {
+                let me = shared.snapshots.borrow().user_id.clone()?;
+                now.activity(&me)
+            });
+            crate::own_activity::add(&mut shared.presence, listening);
             Gateway::connect(&token, shared.presence.clone(), &mut reconnects).await
         };
         let connected = tokio::select! {
@@ -354,6 +362,7 @@ impl Session<'_> {
                     self.show_presence().await
                 }
                 () = activity_changed(&mut self.shared.activity) => self.show_presence().await,
+                () = spotify_changed(&mut self.shared.spotify) => self.show_presence().await,
                 () = self.away_changes.as_mut(), if self.away_change.is_some() => {
                     self.show_presence().await
                 }
@@ -759,6 +768,14 @@ impl Session<'_> {
         let activity = activity.filter(|_| self.tracker.show_game);
         self.show_playing(activity.as_deref());
         crate::own_activity::merge(&mut presence, activity.as_deref());
+        // Fork: what Spotify plays shows beside the game.
+        let spotify = self.shared.spotify.borrow_and_update().clone();
+        if self.tracker.spotify != spotify {
+            self.tracker.spotify = spotify.clone();
+            self.publisher.changed();
+        }
+        let listening = spotify.and_then(|now| now.activity(&self.tracker.me));
+        crate::own_activity::add(&mut presence, listening);
         if presence != self.shared.presence {
             self.gateway.update_presence(presence.clone()).await?;
             self.shared
@@ -791,6 +808,14 @@ impl Session<'_> {
             .as_mut()
             .reset(Instant::now() + status_left(&self.tracker));
     }
+}
+
+/// Fork: the same for what Spotify plays.
+async fn spotify_changed(spotify: &mut watch::Receiver<Option<Arc<crate::spotify::SpotifyNow>>>) {
+    if spotify.changed().await.is_ok() {
+        return;
+    }
+    std::future::pending::<()>().await;
 }
 
 /// A stopped activity bridge must not spin the session loop.

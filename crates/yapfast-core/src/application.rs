@@ -517,6 +517,8 @@ pub struct AppState {
     /// it shows.
     pub discord_show_game: bool,
     pub discord_playing: Option<chat::Playing>,
+    /// Fork: what the linked Spotify account plays, or has paused.
+    pub discord_spotify: Option<chat::Spotify>,
     /// How loud the Discord account's soundboard plays, as Discord keeps
     /// it: from 0 to 100, on its slider's curve.
     pub soundboard_volume: f32,
@@ -2212,6 +2214,8 @@ pub enum Action {
     SetStatus(String),
     /// Share the game the Discord account plays, or stop.
     ShowGame(bool),
+    /// Fork: pause, play or skip on the linked Spotify account.
+    Spotify(chat::SpotifyControl),
     /// Set how loud the Discord account's soundboard plays, on its slider
     /// from 0 to 100.
     SoundboardVolume(f32),
@@ -2973,6 +2977,17 @@ impl Application {
                 self.state.navigation.clone(),
                 self.state.selected.clone(),
             ));
+        }
+        // Fork: the cover of what Spotify plays.
+        if let Some(cover) = self
+            .state
+            .discord_spotify
+            .as_ref()
+            .and_then(|now| now.cover_url.as_deref())
+            && !self.requested_pictures.contains(cover)
+        {
+            self.requested_pictures.insert(cover.to_owned());
+            wanted.push(cover.to_owned());
         }
         // The thread beside is short, and shows its custom emoji whole.
         if let Some(aside) = &self.state.aside
@@ -3835,6 +3850,14 @@ impl Application {
                 vec![Effect::Backend(Command::Discord(
                     DiscordCommand::SetStatus(status),
                 ))]
+            }
+            Action::Spotify(control) => {
+                if self.state.preview || self.state.discord_spotify.is_none() {
+                    return vec![];
+                }
+                vec![Effect::Backend(Command::Discord(DiscordCommand::Spotify(
+                    control,
+                )))]
             }
             Action::ShowGame(shown) => {
                 if self.state.preview

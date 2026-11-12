@@ -44,7 +44,7 @@ import { InboxRow, InboxPopout } from "yapfast/inbox.slint";
 import { GifPicker, GifTile, PickerTab } from "gifs.slint";
 import { StickerPicker, StickerGridTile } from "stickers.slint";
 import { ActionButton, IconButton, Motion, PingToggle, DeviceToggle, Avatar, TextField, MessagesSkeleton, ContextMenu, MenuItem, MenuRow, QuickDeviceMenu, HeaderToggle, Banner, StatusText, Nameplate, AccountLook, PictureStore } from "controls.slint";
-import { PersonRow, VoiceCard, CallLink, CallLinkCard, LinkTouch, SignalIcon, VoiceDock, StreamPip, CallInvite, JoinVoice, ParticipantGrid, CallControls, IncomingCall, SwitchDialog, InputLevel, ShareMenu, ShareScreen, VolumeMenu, Soundboard, SoundRow } from "voice.slint";
+import { PersonRow, VoiceCard, CallLink, CallLinkCard, LinkTouch, SignalIcon, VoiceDock, SpotifyDock, StreamPip, CallInvite, JoinVoice, ParticipantGrid, CallControls, IncomingCall, SwitchDialog, InputLevel, ShareMenu, ShareScreen, VolumeMenu, Soundboard, SoundRow } from "voice.slint";
 import { ServerRow, RoomRow, StatusDot, ServerRail, ServerHeader, RoomList, VoiceCardView } from "rail.slint";
 import { StagedFile, StagedTile, Composer, MentionRow, MentionList, EmojiSuggestions, RequestBar } from "composer.slint";
 import { EmojiCell, EmojiRow, EmojiTile, EmojiSection, RailSection, EmojiCard, EmojiCardView, MessageStickerCard, MessageStickerCardView, MessageRow, ReactionToggle, EmojiButton, EmojiPicker, MessageMenu, MessageGallery, MessageStickers, FileCard, MessageContent, EmbedView, BotTag, NoConversation, ConversationStart, HistoryEdge, UnreadBar, PresentBar, ImageViewer, VideoViewer, VideoPlayer, VoicePlayer, Polls } from "messages.slint";
@@ -909,6 +909,15 @@ export component YapfastWindow inherits Window {
     in-out property <string> draft;
     in-out property <string> filter;
     in property <bool> voice-visible;
+    // Fork: what Spotify plays; see SpotifyDock.
+    in property <bool> spotify-visible;
+    in property <string> spotify-title;
+    in property <string> spotify-artists;
+    in property <image> spotify-cover;
+    in property <bool> spotify-playing;
+    in property <int> spotify-duration-ms;
+    in property <int> spotify-progress-ms;
+    callback spotify-control(int);
     in property <bool> voice-active;
     in property <bool> voice-ready;
     in property <bool> voice-leaving;
@@ -2711,6 +2720,12 @@ export component YapfastWindow inherits Window {
                             border-width: 1px; border-color: Theme.outline; border-radius: 12px; background: transparent;
                         }
                     }
+                }
+                // Fork: the Spotify player sits above the call and the account.
+                if root.spotify-visible: SpotifyDock {
+                    title: root.spotify-title; artists: root.spotify-artists; cover: root.spotify-cover;
+                    playing: root.spotify-playing; duration-ms: root.spotify-duration-ms; progress-ms: root.spotify-progress-ms;
+                    control(which) => { root.spotify-control(which); }
                 }
                 // The dock spans the rail and the sidebar. Its avatar and voice icon sit on the
                 // rail's axis, 36px from the left; names and status start at 64px.

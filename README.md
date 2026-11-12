@@ -28,6 +28,13 @@ Windows uniquement. Chaque push sur `main` publie une nouvelle release automatiq
 **Emojis**
 - Tous les emojis custom sont utilisables sans Nitro. Ceux que tu n'as pas le droit d'utiliser partent en lien d'image, comme FakeNitro de BetterDiscord.
 
+**Spotify**
+- Activité « Écoute Spotify » comme l'app Discord : titre, artistes, pochette, barre de temps. Il faut avoir lié Spotify dans Discord (Paramètres → Connexions) ; respecte le réglage « Afficher sur le profil » de la connexion.
+- Mini-lecteur Spotify en bas à gauche, au-dessus de l'appel : précédent, pause/lecture, suivant (contrôle = Spotify Premium).
+
+**Jeux**
+- Les jeux protégés par un anti-cheat (VALORANT avec Vanguard…) sont détectés tout seuls avec leur vraie fiche Discord (nom + image), plus besoin de les ajouter à la main.
+
 **Paramètres**
 - Paramètres → Discord : la liste des comptes bloqués est repliée derrière un bouton **See blocked accounts**.
 

@@ -103,6 +103,13 @@ async fn combine(
     }
 }
 
+/// Fork: adds another activity, such as Spotify's, after [`merge`].
+pub(crate) fn add(presence: &mut Value, activity: Option<Value>) {
+    if let (Some(activities), Some(activity)) = (presence["activities"].as_array_mut(), activity) {
+        activities.push(activity);
+    }
+}
+
 pub(crate) fn merge(presence: &mut Value, activity: Option<&Value>) {
     if let Some(activities) = presence["activities"].as_array_mut() {
         activities.retain(|value| value["type"] == 4);

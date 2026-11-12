@@ -1570,6 +1570,28 @@ impl Adapter {
             state,
             state.account_avatar.as_deref(),
         ));
+        // Fork: what Spotify plays.
+        let spotify = state.discord_spotify.as_ref();
+        window.set_spotify_visible(spotify.is_some());
+        if let Some(now) = spotify {
+            window.set_spotify_title(now.title.as_str().into());
+            window.set_spotify_artists(now.artists.as_str().into());
+            window.set_spotify_cover(cached_picture(
+                &mut self.pictures,
+                state,
+                now.cover_url.as_deref(),
+            ));
+            window.set_spotify_playing(now.playing);
+            window.set_spotify_duration_ms(i32::try_from(now.duration_ms).unwrap_or(i32::MAX));
+            let elapsed = if now.playing {
+                yapfast_core::clock::now_ms().saturating_sub(now.at_ms)
+            } else {
+                0
+            };
+            window.set_spotify_progress_ms(
+                i32::try_from((now.progress_ms + elapsed).min(now.duration_ms)).unwrap_or(0),
+            );
+        }
         // The account's card, from its own profile once that's come. Its
         // pictures are counted again only once some picture has come.
         let shown = self.account_profile_shown.take();

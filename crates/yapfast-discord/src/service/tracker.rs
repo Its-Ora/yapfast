@@ -168,6 +168,8 @@ pub(super) struct Tracker {
     nsfw_allowed: bool,
     nsfw_commands_in_dms: bool,
     pub(super) playing: Option<Arc<crate::own_activity::Playing>>,
+    /// Fork: what the linked Spotify account plays.
+    pub(super) spotify: Option<Arc<crate::spotify::SpotifyNow>>,
     /// The soundboard's volume and join sounds, from the settings.
     soundboard_volume: Option<f32>,
     join_sounds: Arc<[crate::soundboard::JoinSound]>,
@@ -243,6 +245,7 @@ impl Tracker {
             // As in Discord's apps, until the settings say otherwise.
             show_game: true,
             playing: None,
+            spotify: None,
             soundboard_volume: None,
             join_sounds: Arc::from([]),
             requests: HashMap::new(),
@@ -1974,6 +1977,7 @@ impl Tracker {
             soundboard_volume: self.soundboard_volume,
             join_sounds: self.join_sounds.clone(),
             playing: self.playing.clone(),
+            spotify: self.spotify.clone(),
             friend_requests: people.friend_requests,
             voice,
             voice_started: self.voice_started.clone(),

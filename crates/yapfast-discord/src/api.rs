@@ -739,6 +739,52 @@ impl Api {
 
     /// The message that each of up to 25 message requests is waiting with,
     /// as Discord's requests list shows it: `[{channel_id, message_preview}]`.
+    /// Fork: the accounts linked to this one (Spotify, Steam...).
+    pub async fn connections(&self) -> Result<Value> {
+        self.json(self.request(Method::GET, "/users/@me/connections"))
+            .await
+    }
+
+    /// Fork: an access token for the linked Spotify account by this id, as
+    /// Discord's client asks for one to show and control what it plays.
+    pub async fn spotify_token(&self, id: &str) -> Result<String> {
+        let answer = self
+            .json(self.request(
+                Method::GET,
+                &format!("/users/@me/connections/spotify/{id}/access-token"),
+            ))
+            .await?;
+        answer["access_token"]
+            .as_str()
+            .map(str::to_owned)
+            .context("Discord gave no Spotify access token")
+    }
+
+    /// Fork: a call to Spotify's Web API with that token: its status and
+    /// what it answered, if JSON.
+    pub(crate) async fn spotify(
+        &self,
+        method: Method,
+        path: &str,
+        token: &str,
+    ) -> Result<(u16, Option<Value>)> {
+        let response = self
+            .http
+            .request(method, format!("https://api.spotify.com/v1{path}"))
+            .bearer_auth(token)
+            .header(header::CONTENT_LENGTH, 0)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .context("could not reach Spotify")?;
+        let status = response.status().as_u16();
+        let body = response
+            .bytes()
+            .await
+            .context("could not read Spotify's answer")?;
+        Ok((status, serde_json::from_slice(&body).ok()))
+    }
+
     /// Fork: the latest messages that mention this account by name, without
     /// @everyone, @here or role mentions, newest first; at most 100.
     pub async fn direct_mentions(&self) -> Result<Value> {

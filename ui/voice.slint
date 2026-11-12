@@ -1555,3 +1555,70 @@ export component Soundboard inherits Rectangle {
         }
     }
 }
+
+// Fork: what the Spotify account linked to Discord plays, with its cover,
+// a bar of how far in it is, and buttons that go back, pause or play, and
+// skip. Controlling it takes Spotify Premium.
+export component SpotifyDock inherits Rectangle {
+    in property <string> title;
+    in property <string> artists;
+    in property <image> cover;
+    in property <bool> playing;
+    in property <int> duration-ms;
+    /// How far in it was when Spotify last said.
+    in property <int> progress-ms;
+    /// 0 back, 1 pause or play, 2 skip.
+    callback control(int);
+    // The time since Spotify last said, counted here while it plays.
+    private property <int> since-ms: 0;
+    changed progress-ms => { root.since-ms = 0; }
+    changed playing => { root.since-ms = 0; }
+    private property <int> at-ms: min(root.duration-ms, root.progress-ms + root.since-ms);
+    Timer {
+        interval: 1s; running: root.playing;
+        triggered => { root.since-ms += 1000; }
+    }
+    function clock(ms: int) -> string {
+        let seconds = Math.floor(ms / 1000);
+        let rest = Math.mod(seconds, 60);
+        return Math.floor(seconds / 60) + ":" + (rest < 10 ? "0" : "") + rest;
+    }
+    background: Theme.panel;
+    height: 64px;
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 8px; padding-top: 8px; padding-bottom: 10px; spacing: 10px;
+        Rectangle {
+            width: 44px; height: 44px; border-radius: 6px; clip: true; background: Theme.sunken;
+            Image { source: root.cover; width: 44px; height: 44px; image-fit: ImageFit.cover; }
+            if root.cover.width == 0: Image {
+                source: @image-url("icons/music.svg"); width: 20px; height: 20px; colorize: #1db954;
+            }
+        }
+        VerticalLayout {
+            spacing: 2px; alignment: center; horizontal-stretch: 1;
+            Text { text: root.title; color: Theme.text; font-size: 13px; font-weight: 600; overflow: elide; }
+            Text { text: root.artists; color: Theme.muted; font-size: 12px; overflow: elide; }
+            Rectangle {
+                height: 3px; border-radius: 2px; background: Theme.line;
+                Rectangle {
+                    x: 0px; height: parent.height; border-radius: 2px; background: #1db954;
+                    width: root.duration-ms > 0 ? parent.width * root.at-ms / root.duration-ms : 0px;
+                }
+            }
+            Text {
+                text: root.clock(root.at-ms) + " / " + root.clock(root.duration-ms);
+                color: Theme.faint; font-size: 10px;
+            }
+        }
+        HorizontalLayout {
+            spacing: 0px; alignment: center;
+            IconButton { icon: @image-url("icons/skip-back.svg"); label: "Previous"; size: 28px; glyph: 14px; clicked => { root.control(0); } }
+            IconButton {
+                icon: root.playing ? @image-url("icons/pause.svg") : @image-url("icons/play.svg");
+                label: root.playing ? "Pause" : "Play"; size: 30px; glyph: 18px; tint: Theme.text;
+                clicked => { root.control(1); }
+            }
+            IconButton { icon: @image-url("icons/skip-forward.svg"); label: "Next"; size: 28px; glyph: 14px; clicked => { root.control(2); } }
+        }
+    }
+}

@@ -341,6 +341,9 @@ pub struct Snapshot {
     /// The game this account shows it plays now.
     #[serde(skip)]
     pub playing: Option<Arc<crate::own_activity::Playing>>,
+    /// Fork: what the linked Spotify account plays, or has paused.
+    #[serde(skip)]
+    pub spotify: Option<Arc<crate::spotify::SpotifyNow>>,
     /// The soundboard's volume, from 0 to 100 on the power curve of the
     /// other volumes, and the sounds that play as this account joins
     /// voice, as its settings keep them; the volume is none until they say,
@@ -735,6 +738,8 @@ struct FeedPlace {
 #[derive(Clone)]
 pub struct Discord {
     requests: mpsc::UnboundedSender<Request>,
+    /// Fork: the Spotify player's buttons.
+    spotify_controls: mpsc::UnboundedSender<crate::spotify::SpotifyControl>,
     snapshots: watch::Receiver<Arc<Snapshot>>,
     live: broadcast::Sender<Live>,
     api: Arc<Api>,
@@ -846,6 +851,7 @@ impl Discord {
         // Sharing waits for READY unless an earlier session's settings said.
         let (show_game, shown) = watch::channel(watcher.borrow().show_game);
         let activity = crate::own_activity::start(api.clone(), watcher.clone(), shown);
+        let (spotify, spotify_controls) = crate::spotify::start(api.clone());
         tokio::spawn(cache::keep(watcher.clone(), names.clone()));
         tokio::spawn(session::run(
             token,
@@ -864,6 +870,7 @@ impl Discord {
                 ),
                 presence,
                 activity,
+                spotify,
                 show_game,
                 inactive: None,
                 viewing: None,
@@ -888,11 +895,17 @@ impl Discord {
             default_sounds: Arc::default(),
             commands: kept_commands,
             autocompletes: interactions::Autocompletes::default(),
+            spotify_controls,
         })
     }
 
     pub fn snapshots(&self) -> watch::Receiver<Arc<Snapshot>> {
         self.snapshots.clone()
+    }
+
+    /// Fork: pauses, plays or skips on the linked Spotify account.
+    pub fn spotify(&self, control: crate::spotify::SpotifyControl) {
+        let _ = self.spotify_controls.send(control);
     }
 
     /// Message events for every channel, from now on.

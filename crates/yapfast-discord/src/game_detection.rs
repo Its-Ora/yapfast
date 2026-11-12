@@ -465,7 +465,16 @@ impl Detector {
             let path = if wine {
                 wine_executable(process.cmd())
             } else {
-                process.exe().map(|p| p.to_string_lossy().into_owned())
+                process
+                    .exe()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    // Fork: Windows hides the path of a protected game, such
+                    // as VALORANT under Riot Vanguard, from other programs;
+                    // its file name still says which game it is.
+                    .or_else(|| {
+                        cfg!(target_os = "windows")
+                            .then(|| process.name().to_string_lossy().into_owned())
+                    })
             };
             due.push((*pid, started, fingerprint, wine, path));
         }

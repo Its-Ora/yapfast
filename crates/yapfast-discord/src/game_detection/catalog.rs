@@ -339,7 +339,12 @@ impl Catalog {
             .iter()
             .find(|rule| {
                 rule.windows == windows
-                    && suffix_matches(path, &rule.suffix)
+                    && (suffix_matches(path, &rule.suffix)
+                        // Fork: a file name alone, when Windows hides the
+                        // folder, matches the rule's file name.
+                        || (windows
+                            && !path.contains('/')
+                            && rule.suffix.rsplit('/').next() == Some(path)))
                     && rule
                         .arguments
                         .as_ref()
@@ -647,6 +652,28 @@ mod tests {
         assert_eq!(catalog.kept.borrow().len(), 2, "game.exe and game differ");
         assert!(catalog.matches("/opt/other", &[], false).is_some());
         assert_eq!(catalog.kept.borrow().len(), 3);
+    }
+
+    // Fork: Windows hides a protected game's folder, as Riot Vanguard does
+    // VALORANT's; its file name alone finds it.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn finds_a_windows_game_by_its_file_name_alone() {
+        let (_file, catalog) = catalog(json!([
+            {"id":"700136079562375258","name":"VALORANT","executables":[
+                {"os":"win32","name":"win64/valorant-win64-shipping.exe"}]}
+        ]));
+        let found = catalog
+            .matches("VALORANT-Win64-Shipping.exe", &[], true)
+            .unwrap();
+        assert_eq!(&*found.name, "VALORANT");
+        assert_eq!(found.id, Some(700136079562375258));
+        assert!(
+            catalog
+                .matches("C:/Other/VALORANT-Win64-Shipping.exe", &[], true)
+                .is_none(),
+            "a path still has to end as the rule does"
+        );
     }
 
     // Linux keeps Windows rules too, for Wine.

@@ -2696,6 +2696,20 @@ pub(super) fn bind_callbacks(window: &YapfastWindow, adapter: &Rc<RefCell<Adapte
             }
         });
     }
+    {
+        let state = adapter.clone();
+        let weak = window.as_weak();
+        window.on_spotify_control(move |which| {
+            if let Some(window) = weak.upgrade() {
+                let control = match which {
+                    0 => yapfast_core::chat::SpotifyControl::Previous,
+                    2 => yapfast_core::chat::SpotifyControl::Next,
+                    _ => yapfast_core::chat::SpotifyControl::PlayPause,
+                };
+                state.borrow_mut().action(&window, Action::Spotify(control));
+            }
+        });
+    }
     window.on_select_room(move |id| {
         if let Some(window) = weak.upgrade() {
             let mut adapter = state.borrow_mut();

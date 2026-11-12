@@ -248,6 +248,28 @@ pub struct Playing {
     pub started_ms: Option<u64>,
 }
 
+/// Fork: what the Spotify account linked to Discord plays, or has paused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Spotify {
+    pub title: String,
+    pub artists: String,
+    pub album: String,
+    pub cover_url: Option<String>,
+    pub duration_ms: u64,
+    /// How far in it was at `at_ms` (Unix milliseconds).
+    pub progress_ms: u64,
+    pub at_ms: u64,
+    pub playing: bool,
+}
+
+/// Fork: what the Spotify player's buttons ask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpotifyControl {
+    PlayPause,
+    Next,
+    Previous,
+}
+
 /// A Discord friend request waiting for an answer.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FriendRequest {
@@ -3120,6 +3142,8 @@ pub enum DiscordCommand {
     /// Share the game the Discord account plays, or stop;
     /// [`Event::ShowGameSet`] follows.
     ShowGame(bool),
+    /// Fork: pause, play or skip on the linked Spotify account.
+    Spotify(SpotifyControl),
     /// Set how loud the soundboard plays, as Discord keeps it, from 0 to
     /// 100; [`Event::SoundboardVolumeSet`] follows.
     SoundboardVolume(f32),

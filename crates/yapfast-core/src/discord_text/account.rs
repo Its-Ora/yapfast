@@ -452,6 +452,17 @@ pub(super) fn command(
         }
         return None;
     }
+    if let Command::Discord(DiscordCommand::Spotify(control)) = command {
+        if let Ok(discord) = discord {
+            use yapfast_discord::spotify::SpotifyControl as Control;
+            discord.spotify(match control {
+                crate::chat::SpotifyControl::PlayPause => Control::PlayPause,
+                crate::chat::SpotifyControl::Next => Control::Next,
+                crate::chat::SpotifyControl::Previous => Control::Previous,
+            });
+        }
+        return None;
+    }
     if let Command::Discord(DiscordCommand::ShowGame(shown)) = command {
         match discord {
             Ok(discord) => {
