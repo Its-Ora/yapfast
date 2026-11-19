@@ -301,6 +301,13 @@ impl Gateway {
         Self::connect_to(&url, token, presence, reconnects, limiter).await
     }
 
+    /// Connects as [`Self::connect`] does, to a fake Discord at `url`.
+    #[cfg(test)]
+    pub(crate) async fn connect_at(url: &str, presence: Value) -> Result<(Self, Value)> {
+        let limiter = Limiter::new(SEND_LIMIT, SEND_WINDOW);
+        Self::connect_to(url, "token", presence, &mut Reconnects::default(), limiter).await
+    }
+
     async fn connect_to(
         url: &str,
         token: &str,
@@ -714,7 +721,7 @@ impl Connection {
                 match event {
                     Event::Ready => {
                         if let Some(token) = crate::ready::auth_token(&data) {
-                            self.token = token.to_owned();
+                            token.clone_into(&mut self.token);
                         }
                         self.session_id = data["session_id"].as_str().map(str::to_owned);
                         self.resume_url = data["resume_gateway_url"]

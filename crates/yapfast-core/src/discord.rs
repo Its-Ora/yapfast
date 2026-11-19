@@ -59,6 +59,9 @@ pub fn set_custom_games(games: &[(String, String)]) {
     let _ = games;
 }
 
+#[cfg(feature = "discord")]
+use crate::chat::is_frame_layer;
+
 /// The categories message requests are listed under in the DM list.
 pub const REQUESTS: &str = "Message requests";
 pub const SPAM: &str = "Spam";
@@ -76,6 +79,11 @@ const PICTURE_SIZE: u32 = 128;
 /// 448x84 or 672x126, is shrunk to the smaller, twice a row's height.
 #[cfg(feature = "discord")]
 const COLLECTIBLE_SIZE: (u32, u32) = (448, 160);
+/// A layer of a profile frame, about as wide as a card draws it past its
+/// sides; a rail runs the card's height. Shrinking one twice as wide when
+/// it's drawn leaves its edges jagged.
+#[cfg(feature = "discord")]
+const FRAME_SIZE: (u32, u32) = (460, 1600);
 /// The most a profile badge's icon is decoded at: twice the 20px it shows at.
 #[cfg(feature = "discord")]
 const BADGE_SIZE: u32 = 40;
@@ -231,6 +239,7 @@ pub fn server_tag(tag: Option<yapfast_discord::message::Tag>) -> Option<chat::Se
     Some(chat::ServerTag {
         text: tag.text,
         badge: tag.badge,
+        guild: tag.guild,
     })
 }
 
@@ -782,7 +791,7 @@ fn server_rooms(
     // Threads list under their channels, as in Discord's client: those this
     // account is in that are still active, while they're new enough, unread
     // and not muted, or mention it; and those on screen.
-    let mut threads: std::collections::HashMap<&str, Vec<MarkedChannel>> =
+    let mut threads: std::collections::HashMap<&str, Vec<MarkedChannel<'_>>> =
         std::collections::HashMap::new();
     for thread in server.threads() {
         let Some(details) = thread.thread.as_deref() else {
@@ -974,10 +983,15 @@ fn server_rooms(
         folder: None,
         hide_muted: server.marks.notifications.hide_muted_channels,
         community: server.community,
+        afk_channel: server
+            .afk_channel
+            .as_deref()
+            .map(|channel| room_id(&server.id, channel)),
         pinned,
         banner: server.banner.clone(),
         verified: server.verified,
         boosts: server.boost_bar.then_some(server.boosts),
+        premium_tier: (server.premium_tier > 0).then_some(server.premium_tier),
         events: server
             .events
             .iter()
@@ -1051,7 +1065,7 @@ fn mark(server: &MarkedServer, channel: &yapfast_discord::ready::Channel) -> cha
 #[cfg(feature = "discord")]
 fn thread_room(
     server: &MarkedServer,
-    thread: MarkedChannel,
+    thread: MarkedChannel<'_>,
     parent: &ChatRoom,
     me: &str,
     premium: u8,
@@ -1532,6 +1546,8 @@ impl PictureLoads {
             BANNER_SIZE
         } else if pending.url.ends_with(chat::EFFECT_PICTURE) {
             EFFECT_SIZE
+        } else if is_frame_layer(&pending.url) {
+            FRAME_SIZE
         } else if pending.url.contains("/collectibles-shop/") {
             COLLECTIBLE_SIZE
         } else if pending.url.contains("/badge-icons/") {
@@ -1750,6 +1766,16 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn a_frames_layers_decode_larger_than_a_decorations_still() {
+        let cdn = "https://cdn.discordapp.com/media/v1/collectibles-shop";
+        assert!(is_frame_layer(&format!("{cdn}/9/a/static")));
+        assert!(!is_frame_layer(&format!("{cdn}/9/static")));
+        assert!(!is_frame_layer(
+            "https://cdn.discordapp.com/banners/1/a.png"
+        ));
+    }
 
     #[tokio::test]
     async fn cancelled_turn_waits_are_removed_independently_in_the_same_batch() {
@@ -2078,7 +2104,7 @@ mod tests {
         pictures.cancel(&[url.clone(), url.clone()]);
         pictures
             .prefetch
-            .enqueue(&pictures.loads, vec![url.clone(), url.clone()]);
+            .enqueue(&pictures.loads, vec![url.clone(), url]);
         assert!(!warming_cancel.is_aborted());
         assert!(pictures.prefetch.next(&pictures.loads).is_none());
         assert_eq!(locked(&pictures.loads.pending).len(), 1);

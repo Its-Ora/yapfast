@@ -10,6 +10,8 @@ impl Application {
             return vec![];
         }
         let open = self.state.dm_screen.is_some();
+        // The add-friend page is part of the friends screen.
+        self.state.add_friend = None;
         if !self.state.nav_walking {
             let previous = self.state.place();
             self.state.record_visit(previous, &HistoryPlace::Dm(screen));
@@ -73,7 +75,7 @@ impl Application {
         self.save_status(Some(status))
     }
 
-    pub(super) fn answer_request(&mut self, accept: bool) -> Vec<Effect> {
+    pub(super) fn answer_request(&self, accept: bool) -> Vec<Effect> {
         match self.state.selected_room() {
             Some(room) if room.request && self.state.discord_online => {
                 vec![Effect::Backend(Command::Discord(
@@ -105,19 +107,21 @@ impl Application {
         }
         let fetch = room.network == Network::Discord && !self.state.preview;
         let (room, profile) = (room.id.clone(), dm_profile(room, person.clone()));
-        self.state.panel_profile = Some(ProfileView {
+        self.state.panel_profile = Some(Arc::new(ProfileView {
             profile,
             large: false,
             loading: fetch,
             kept: false,
             note: None,
             ..Default::default()
-        });
+        }));
         if fetch {
             vec![Effect::Backend(Command::Discord(DiscordCommand::Profile {
                 room,
                 user: person,
                 effect: self.state.cosmetics.effects,
+                // The DM's panel draws no frame, so nothing of one is fetched.
+                frame: false,
             }))]
         } else {
             vec![]
@@ -127,8 +131,8 @@ impl Application {
     /// Reading the newest messages of an unread Discord channel reads it,
     /// as Discord's client does: once they're in view with the window in
     /// front, and the "New" divider is placed, so the view isn't about to
-    /// jump to it. A forum reads on showing it. Matrix rooms are read in the
-    /// backend.
+    /// jump to it, and Mark Unread didn't mark it unread since it opened. A
+    /// forum reads on showing it. Matrix rooms are read in the backend.
     pub(super) fn mark_discord_read(&self) -> Vec<Effect> {
         match self.state.selected_room() {
             Some(room)
@@ -137,7 +141,8 @@ impl Application {
                     && !self.state.detached
                     && (room.forum || self.state.reading && self.read_marker.is_none())
                     && room.network == Network::Discord
-                    && (room.unread > 0 || room.mentions > 0) =>
+                    && (room.unread > 0 || room.mentions > 0)
+                    && self.held_unread.as_ref() != Some(&room.id) =>
             {
                 vec![Effect::Backend(Command::MarkRead {
                     room: room.id.clone(),
@@ -149,7 +154,7 @@ impl Application {
     }
 
     pub(super) fn list_discord(&mut self) -> Vec<Effect> {
-        #[allow(unused_mut)]
+        #[allow(unused_mut, reason = "only builds with Discord add to it")]
         let mut effects = vec![];
         #[cfg(feature = "discord")]
         if let Some(snapshot) = &self.discord {
@@ -294,7 +299,7 @@ impl Application {
     }
 
     pub(super) fn change_relationship(
-        &mut self,
+        &self,
         user: String,
         change: chat::RelationshipChange,
         location: &'static str,
@@ -451,7 +456,9 @@ impl Application {
             if let Some(account) = &snapshot.account {
                 self.state.account_name = Some(account.name.clone());
                 self.state.account_avatar = Some(account.avatar.clone());
-                self.state.account_decoration = account.decoration.clone();
+                self.state
+                    .account_decoration
+                    .clone_from(&account.decoration);
                 self.state.account_nameplate = account.nameplate.clone().map(Into::into);
             }
             self.state.account_status = Some(match &snapshot.status {
@@ -461,10 +468,13 @@ impl Application {
             });
         }
         self.state.discord_linked = true;
-        self.state.discord_user = snapshot.user_id.clone();
+        self.state.discord_user.clone_from(&snapshot.user_id);
         self.state.discord_presence =
             Some(snapshot.presence.clone()).filter(|presence| !presence.is_empty());
-        self.state.discord_friends = snapshot.friends.clone();
+        if !Arc::ptr_eq(&self.state.discord_friends, &snapshot.friends) {
+            self.state.discord_friends = snapshot.friends.clone();
+            self.state.people_changed();
+        }
         use yapfast_discord::service::Snapshot;
         // The tracker shares each list of people between snapshots while it
         // stays the same, so one the last snapshot shared shows already.
@@ -483,6 +493,7 @@ impl Application {
                     avatar: Some(blocked.avatar.clone()),
                 })
                 .collect();
+            self.state.people_changed();
         }
         self.state.discord_ignored = snapshot.ignored.clone();
         self.state.discord_names = Some(snapshot.names.clone());
@@ -495,11 +506,14 @@ impl Application {
                     name: friend.name.clone(),
                     nickname: friend.nickname.clone(),
                     avatar: Some(friend.avatar.clone()),
+                    decoration: friend.decoration.clone(),
                     presence: friend.presence.map(discord::presence),
                     activity: friend.activity.clone(),
                     activities: friend.activities.clone(),
+                    since: friend.since,
                 })
                 .collect();
+            self.state.people_changed();
         }
         self.state.custom_status =
             snapshot
@@ -526,6 +540,9 @@ impl Application {
                 })
                 .collect();
         }
+        if changed(|a, b| Arc::ptr_eq(&a.own_activities, &b.own_activities)) {
+            self.state.discord_activities = snapshot.own_activities.clone();
+        }
         let playing = snapshot.playing.as_deref();
         // Snapshots come often; the game rarely changes.
         let shown = self.state.discord_playing.as_ref();
@@ -536,20 +553,6 @@ impl Application {
                 name: playing.name.clone(),
                 started_ms: playing.started_ms,
             });
-        }
-        // Fork: what Spotify plays.
-        let spotify = snapshot.spotify.as_deref().map(|now| chat::Spotify {
-            title: now.title.clone(),
-            artists: now.artists.replace("; ", ", "),
-            album: now.album.clone(),
-            cover_url: now.cover_url.clone(),
-            duration_ms: now.duration_ms,
-            progress_ms: now.progress_ms,
-            at_ms: now.at_ms,
-            playing: now.playing,
-        });
-        if self.state.discord_spotify != spotify {
-            self.state.discord_spotify = spotify;
         }
         if changed(|a, b| Arc::ptr_eq(&a.friend_requests, &b.friend_requests)) {
             self.state.friend_requests = snapshot
@@ -563,6 +566,7 @@ impl Application {
                     spam: request.spam,
                 })
                 .collect();
+            self.state.people_changed();
         }
         // The earlier snapshot still holds its servers' categories and roles,
         // so sharing them means nothing about them changed.
@@ -635,17 +639,20 @@ impl Application {
     /// and asking for them as a picker opens leaves the rail blank meanwhile.
     #[cfg(feature = "discord")]
     fn prefetch_server_icons(&mut self) -> Option<Effect> {
+        let prefetched = &mut self.server_icons_prefetched;
         let icons: Vec<String> = self
             .discord
             .as_ref()?
             .servers
             .iter()
-            .filter_map(|server| server.icon.clone())
-            .collect();
-        let icons: Vec<String> = icons
-            .into_iter()
-            .filter(|url| !url.is_empty() && self.server_icons_prefetched.insert(url.clone()))
-            .filter(|url| !yapfast_discord::cache::picture_is_kept(url))
+            .filter_map(|server| server.icon.as_ref())
+            .filter_map(|url| {
+                if url.is_empty() || prefetched.contains(url) {
+                    return None;
+                }
+                prefetched.insert(url.clone());
+                (!yapfast_discord::cache::picture_is_kept(url)).then(|| url.clone())
+            })
             .collect();
         (!icons.is_empty()).then_some(Effect::Backend(Command::Discord(
             DiscordCommand::PrefetchPictures(icons),
@@ -687,10 +694,11 @@ impl Application {
         self.state.mfa.clear();
         self.state.friends.clear();
         self.state.friend_requests.clear();
+        self.state.people_changed();
         self.state.custom_status = None;
         self.state.discord_show_game = false;
         self.state.discord_playing = None;
-        self.state.discord_spotify = None;
+        self.state.discord_activities = Default::default();
         self.state.join_sounds.clear();
         self.state.sound_catalog = None;
         self.show_lists()

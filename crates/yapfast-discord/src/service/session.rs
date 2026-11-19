@@ -44,10 +44,12 @@ pub(super) struct Shared {
     pub(super) presence: Value,
     /// The game this account plays, as Rich Presence or detection says.
     pub(super) activity: watch::Receiver<Option<Arc<Value>>>,
-    /// Fork: what the linked Spotify account plays.
-    pub(super) spotify: watch::Receiver<Option<Arc<crate::spotify::SpotifyNow>>>,
     /// Whether the account shares it, which runs or stops what finds it.
     pub(super) show_game: watch::Sender<bool>,
+    /// The song this account plays, from what follows its linked Spotify,
+    /// and those links, which READY and USER_CONNECTIONS_UPDATE give.
+    pub(super) music: watch::Receiver<Option<Arc<Value>>>,
+    pub(super) spotify: watch::Sender<crate::spotify::Accounts>,
     /// Nobody has used Yapfast since then, in Unix milliseconds, and whether
     /// it may show idle; see [`settings::Away`].
     pub(super) inactive: Option<(u64, bool)>,
@@ -82,16 +84,13 @@ pub(super) async fn run(
                 shared.api.learn_build_number().await;
             }
             let playing = *shared.show_game.borrow();
+            let music = shared.music.borrow().clone();
+            let music = music.filter(|_| shared.presence["status"] != "invisible");
             crate::own_activity::merge(
                 &mut shared.presence,
                 shared.activity.borrow().as_deref().filter(|_| playing),
+                music.as_deref(),
             );
-            // Fork: and what Spotify plays, as its own activity.
-            let listening = shared.spotify.borrow().as_ref().and_then(|now| {
-                let me = shared.snapshots.borrow().user_id.clone()?;
-                now.activity(&me)
-            });
-            crate::own_activity::add(&mut shared.presence, listening);
             Gateway::connect(&token, shared.presence.clone(), &mut reconnects).await
         };
         let connected = tokio::select! {
@@ -222,6 +221,9 @@ async fn connected_session(
         return Ended::Failed(anyhow!("Discord's READY had no user"));
     };
     let mut tracker = Tracker::from_ready(me, &ready, shared.names.clone());
+    shared
+        .spotify
+        .send_if_modified(|accounts| accounts.keep(&tracker.me, &ready["connected_accounts"]));
     shared
         .notes
         .lock()
@@ -362,7 +364,7 @@ impl Session<'_> {
                     self.show_presence().await
                 }
                 () = activity_changed(&mut self.shared.activity) => self.show_presence().await,
-                () = spotify_changed(&mut self.shared.spotify) => self.show_presence().await,
+                () = activity_changed(&mut self.shared.music) => self.show_presence().await,
                 () = self.away_changes.as_mut(), if self.away_change.is_some() => {
                     self.show_presence().await
                 }
@@ -498,6 +500,27 @@ impl Session<'_> {
                     if sync {
                         self.acks.read(channel, message);
                     }
+                }
+                Ok(())
+            }
+            Request::MarkUnread {
+                channel,
+                last,
+                mentions,
+                sync,
+            } => {
+                self.tracker.unreads.mark_unread(&channel, last, mentions);
+                self.publisher.changed();
+                // A read on its way would read it again.
+                self.acks.forget(&channel);
+                if sync {
+                    let api = self.shared.api.clone();
+                    tokio::spawn(async move {
+                        let last = last.to_string();
+                        if let Err(error) = api.ack_manual(&channel, &last, mentions).await {
+                            tracing::warn!(%error, "could not mark a Discord channel unread");
+                        }
+                    });
                 }
                 Ok(())
             }
@@ -716,6 +739,9 @@ impl Session<'_> {
             self.custom_status_changed();
             self.show_presence().await?;
         }
+        if *event == Event::UserConnectionsUpdate {
+            self.ask_connections();
+        }
         self.shared.lists.group_event(&self.tracker, &dispatch);
         if self.streams.waiting() {
             if event.is_stream() {
@@ -767,15 +793,13 @@ impl Session<'_> {
         let activity = self.shared.activity.borrow_and_update().clone();
         let activity = activity.filter(|_| self.tracker.show_game);
         self.show_playing(activity.as_deref());
-        crate::own_activity::merge(&mut presence, activity.as_deref());
-        // Fork: what Spotify plays shows beside the game.
-        let spotify = self.shared.spotify.borrow_and_update().clone();
-        if self.tracker.spotify != spotify {
-            self.tracker.spotify = spotify.clone();
+        // An invisible account shares no music, as in Discord's client.
+        let music = self.shared.music.borrow_and_update().clone();
+        let music = music.filter(|_| self.tracker.status != "invisible");
+        crate::own_activity::merge(&mut presence, activity.as_deref(), music.as_deref());
+        if self.tracker.shows_here(&presence["activities"]) {
             self.publisher.changed();
         }
-        let listening = spotify.and_then(|now| now.activity(&self.tracker.me));
-        crate::own_activity::add(&mut presence, listening);
         if presence != self.shared.presence {
             self.gateway.update_presence(presence.clone()).await?;
             self.shared
@@ -802,20 +826,27 @@ impl Session<'_> {
         }
     }
 
+    /// Asks Discord for the account's linked services, which changed. Until
+    /// it answers, or if it can't, the links known stay.
+    fn ask_connections(&self) {
+        let (api, spotify) = (self.shared.api.clone(), self.shared.spotify.clone());
+        let me = self.tracker.me.clone();
+        tokio::spawn(async move {
+            match api.connections().await {
+                Ok(connections) => {
+                    spotify.send_if_modified(|accounts| accounts.keep(&me, &connections));
+                }
+                Err(error) => tracing::warn!(%error, "could not load the account's connections"),
+            }
+        });
+    }
+
     /// Waits for the custom status as it is now to end by itself.
     fn custom_status_changed(&mut self) {
         self.status_ends
             .as_mut()
             .reset(Instant::now() + status_left(&self.tracker));
     }
-}
-
-/// Fork: the same for what Spotify plays.
-async fn spotify_changed(spotify: &mut watch::Receiver<Option<Arc<crate::spotify::SpotifyNow>>>) {
-    if spotify.changed().await.is_ok() {
-        return;
-    }
-    std::future::pending::<()>().await;
 }
 
 /// A stopped activity bridge must not spin the session loop.
@@ -866,4 +897,133 @@ fn status_left(tracker: &Tracker) -> Duration {
         .map_or(Duration::from_secs(86_400 * 365), |at| {
             Duration::from_millis(at.saturating_sub(now_ms()))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::json;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+        time::timeout,
+    };
+    use tokio_tungstenite::{WebSocketStream, accept_async, tungstenite::Message};
+
+    use super::*;
+    use crate::spotify::Accounts;
+
+    const WAIT: Duration = Duration::from_secs(10);
+
+    /// The activities of the next presence this session sends Discord.
+    async fn sent_activities(peer: &mut WebSocketStream<TcpStream>) -> Value {
+        loop {
+            let message = timeout(WAIT, peer.next()).await.unwrap().unwrap().unwrap();
+            if let Message::Text(text) = message {
+                let mut command: Value = serde_json::from_str(text.as_str()).unwrap();
+                if command["op"] == 3 {
+                    return command["d"]["activities"].take();
+                }
+            }
+        }
+    }
+
+    async fn dispatch(
+        peer: &mut WebSocketStream<TcpStream>,
+        sequence: u64,
+        name: &str,
+        data: Value,
+    ) {
+        let dispatch = json!({"op": 0, "s": sequence, "t": name, "d": data});
+        peer.send(Message::text(dispatch.to_string()))
+            .await
+            .unwrap();
+    }
+
+    /// Over sockets, from READY's links and the song to what Discord hears.
+    #[tokio::test]
+    async fn the_song_joins_the_presence_and_the_links_follow_discord() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let presence = json!({"status": "online", "since": 0, "activities": [], "afk": false});
+        let ready = json!({
+            "session_id": "mine",
+            "user": {"id": "7", "username": "me"},
+            "connected_accounts": [{"type": "spotify", "id": "x", "show_activity": true}],
+        });
+        let (connected, mut peer) =
+            tokio::join!(Gateway::connect_at(&url, presence.clone()), async {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut peer = accept_async(stream).await.unwrap();
+                let hello = json!({"op": 10, "d": {"heartbeat_interval": 45_000}});
+                peer.send(Message::text(hello.to_string())).await.unwrap();
+                // The identify.
+                peer.next().await.unwrap().unwrap();
+                dispatch(&mut peer, 1, "READY", ready).await;
+                peer
+            });
+        let (gateway, ready) = connected.unwrap();
+        // Where the session asks for the links again.
+        let http = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut api = Api::anonymous().unwrap();
+        api.base = format!("http://{}", http.local_addr().unwrap());
+
+        let (snapshots, _watcher) = watch::channel(Arc::new(Snapshot::default()));
+        let (live, _) = broadcast::channel(16);
+        let names = Arc::new(RwLock::new(Names::default()));
+        let (_game, activity) = watch::channel(None);
+        let (show_game, _shown) = watch::channel(true);
+        let (music, music_seen) = watch::channel(None);
+        let (spotify, mut accounts) = watch::channel(Accounts::default());
+        let mut shared = Shared {
+            snapshots,
+            live: live.clone(),
+            names: names.clone(),
+            notes: super::super::Notes::default(),
+            api: Arc::new(api),
+            lists: MemberLists::new(vec![], live, names, Presence::Online),
+            presence,
+            activity,
+            show_game,
+            music: music_seen,
+            spotify,
+            inactive: None,
+            viewing: None,
+            beside: None,
+        };
+        let (requests, mut received) = mpsc::unbounded_channel();
+        let session = tokio::spawn(async move {
+            connected_session(gateway, ready, &mut received, &mut shared).await;
+        });
+        timeout(WAIT, accounts.changed()).await.unwrap().unwrap();
+
+        let song = json!({"type": 2, "name": "Spotify", "details": "A Song"});
+        music.send_replace(Some(Arc::new(song.clone())));
+        let mut sent = sent_activities(&mut peer).await;
+        while sent != json!([song]) {
+            sent = sent_activities(&mut peer).await;
+        }
+        // Invisible shares none of it, as Discord's client doesn't.
+        requests.send(Request::Status("invisible".into())).unwrap();
+        assert_eq!(sent_activities(&mut peer).await, json!([]));
+        requests.send(Request::Status("online".into())).unwrap();
+        assert_eq!(sent_activities(&mut peer).await, json!([song]));
+        // A pause takes the song out at once.
+        music.send_replace(None);
+        assert_eq!(sent_activities(&mut peer).await, json!([]));
+
+        // The links changed, so Discord is asked which they are: none now.
+        dispatch(&mut peer, 2, "USER_CONNECTIONS_UPDATE", json!({})).await;
+        let (mut asked, _) = timeout(WAIT, http.accept()).await.unwrap().unwrap();
+        let mut line = [0; 4096];
+        let got = asked.read(&mut line).await.unwrap();
+        assert!(String::from_utf8_lossy(&line[..got]).starts_with("GET /users/@me/connections "));
+        asked
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n[]")
+            .await
+            .unwrap();
+        timeout(WAIT, accounts.changed()).await.unwrap().unwrap();
+
+        session.abort();
+    }
 }

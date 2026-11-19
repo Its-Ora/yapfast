@@ -2,7 +2,7 @@
 //! Matrix and Discord are Cargo features, so a build carries either or both.
 //! Each network runs in its own module beside this one: `matrix_chat` and
 //! `discord_text`. This module routes the UI's commands to them.
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, num::NonZeroU64, path::PathBuf, sync::Arc};
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -248,24 +248,11 @@ pub struct Playing {
     pub started_ms: Option<u64>,
 }
 
-/// Fork: what the Spotify account linked to Discord plays, or has paused.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Spotify {
-    pub title: String,
-    pub artists: String,
-    pub album: String,
-    pub cover_url: Option<String>,
-    pub duration_ms: u64,
-    /// How far in it was at `at_ms` (Unix milliseconds).
-    pub progress_ms: u64,
-    pub at_ms: u64,
-    pub playing: bool,
-}
-
 /// Fork: what the Spotify player's buttons ask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpotifyControl {
-    PlayPause,
+    Play,
+    Pause,
     Next,
     Previous,
 }
@@ -306,11 +293,16 @@ pub struct Friend {
     pub nickname: Option<String>,
     /// The address of their avatar; see [`DiscordCommand::Pictures`].
     pub avatar: Option<String>,
+    /// The address of the decoration they wear around it.
+    pub decoration: Option<Arc<str>>,
     /// Whether they're around, when Discord says, and their custom status or
     /// what they're doing.
     pub presence: Option<Presence>,
     pub activity: Option<String>,
     pub activities: Activities,
+    /// When they became friends, in Unix milliseconds; written out only for
+    /// the profile on screen.
+    pub since: Option<u64>,
 }
 
 /// A file waiting in the composer to go with the next message.
@@ -541,6 +533,9 @@ pub struct ChatServer {
     /// A Discord Community server, whose channel list opens Browse
     /// Channels.
     pub community: bool,
+    /// The room id of its inactive (AFK) voice channel, which the rail
+    /// leaves out of who is in voice, as Discord's server list does.
+    pub afk_channel: Option<String>,
     /// The room ids of the channels this account pinned to the top of its
     /// channel list, a Discord server's, in the order they show there.
     pub pinned: Vec<String>,
@@ -554,6 +549,9 @@ pub struct ChatServer {
     /// How many boosts it has, when its owner shows the boost progress bar
     /// above its channels.
     pub boosts: Option<u32>,
+    /// Its boost level, 1 to 3, which its header shows as a badge; none
+    /// below level 1.
+    pub premium_tier: Option<u8>,
 }
 
 /// A Discord server's scheduled event, as its events list shows it.
@@ -642,6 +640,9 @@ pub enum Permission {
     UseExternalEmojis,
     /// Sending another server's stickers here.
     UseExternalStickers,
+    /// Create scheduled events, as Discord's client asks before showing its
+    /// Events row: managing them all isn't enough on its own.
+    CreateEvents,
 }
 
 /// Which messages notify, in a Discord server or channel.
@@ -743,6 +744,9 @@ pub struct ServerTag {
     pub text: Arc<str>,
     /// The address of the badge's picture; see [`DiscordCommand::Pictures`].
     pub badge: Option<Arc<str>>,
+    /// The Discord server it's from, by its guild id, whose card it opens;
+    /// none when that isn't known.
+    pub guild: Option<NonZeroU64>,
 }
 
 /// A nameplate someone equips from Discord's shop: a strip of picture behind
@@ -839,6 +843,22 @@ impl ProfileEffect {
     }
 }
 
+/// Whether a picture is a layer of a profile frame,
+/// `/collectibles-shop/{sku}/{id}/static`, where a decoration's or
+/// nameplate's still is `/collectibles-shop/{sku}/static`.
+pub fn is_frame_layer(url: &str) -> bool {
+    url.split_once("/collectibles-shop/")
+        .is_some_and(|(_, rest)| rest.ends_with("/static") && rest.matches('/').count() == 2)
+}
+
+/// The address of a banner's moving version: Discord's moving pictures have
+/// hashes that start with `a_`, and come as GIFs.
+pub fn moving_banner(url: &str) -> Option<String> {
+    let (start, end) = url.split_once(".png?")?;
+    let hash = start.rsplit('/').next()?;
+    hash.starts_with("a_").then(|| format!("{start}.gif?{end}"))
+}
+
 /// Marks the address of a profile effect's picture, which decodes at the
 /// card's size rather than an avatar's.
 pub const EFFECT_PICTURE: &str = "#effect";
@@ -885,8 +905,14 @@ pub struct Profile {
     /// The SKU of the profile effect they equip, which
     /// [`Event::ProfileEffect`] describes.
     pub effect: Option<String>,
+    /// The layers of the frame around their card, the back ones first; none
+    /// without one, or until [`Event::ProfileFrame`] says what it is.
+    pub frame: Arc<[ProfileFrameLayer]>,
     /// The two colours of their profile's theme, when they set one.
     pub theme: Option<[u32; 2]>,
+    /// Their Discord profile is private: it hides some of what it holds
+    /// from those who aren't their friends.
+    pub private: bool,
     /// The address of their banner, and its colour when there's no picture.
     pub banner: Option<String>,
     pub accent: Option<u32>,
@@ -903,6 +929,10 @@ pub struct Profile {
     pub created: Option<String>,
     /// When they joined this server, as a date.
     pub joined: Option<String>,
+    /// The server `joined` is of, whose icon shows beside it: its name and
+    /// the address of its icon.
+    pub server_name: String,
+    pub server_icon: Option<String>,
     /// The servers and friends this account shares with them.
     pub servers: Vec<ProfileServer>,
     pub friends: Vec<ProfileFriend>,
@@ -929,6 +959,29 @@ pub struct Profile {
     /// What they did lately, once asked for.
     pub recent: Vec<RecentActivity>,
     pub recent_asked: bool,
+    /// Discord's answer to it came, even an empty or failed one.
+    pub recent_came: bool,
+}
+
+/// One picture of a profile frame; see `yapfast_discord::profile::FrameLayer`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProfileFrameLayer {
+    pub src: String,
+    pub kind: String,
+    pub anchor: String,
+    pub front: bool,
+}
+
+#[cfg(feature = "discord")]
+impl From<&yapfast_discord::profile::FrameLayer> for ProfileFrameLayer {
+    fn from(layer: &yapfast_discord::profile::FrameLayer) -> Self {
+        Self {
+            src: layer.src.clone(),
+            kind: layer.kind.clone(),
+            anchor: layer.anchor.clone(),
+            front: layer.front,
+        }
+    }
 }
 
 /// A past thing on someone's Activity tab.
@@ -1180,6 +1233,8 @@ pub struct Reply {
     pub item: Option<String>,
     /// The author's role colour, where the network gives one.
     pub color: Option<u32>,
+    /// The author's server tag, which Discord's quote shows after the name.
+    pub tag: Option<ServerTag>,
 }
 
 /// Who used which Discord app command a message answers, as the line
@@ -1967,6 +2022,9 @@ pub struct ChatMessage {
     pub tag: Option<ServerTag>,
     /// Forwarded on Discord: its body, files and embeds are the original's.
     pub forwarded: bool,
+    /// The author joined the server in the last week, which Discord marks
+    /// by their name as a new member.
+    pub new_member: bool,
     pub body: String,
     /// The body is Markdown source whose sender also sent formatting.
     pub formatted: bool,
@@ -2534,6 +2592,27 @@ pub struct ServerPreview {
     pub discoverable: bool,
 }
 
+/// What a server tag's card shows of the server it's from, as `GET
+/// /guilds/{guild.id}/profile` answers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TagServer {
+    pub name: String,
+    /// The address of its icon, when it has one.
+    pub icon: Option<String>,
+    /// What it says of itself; empty without it.
+    pub description: String,
+    /// How many members it has, and how many are online, when Discord
+    /// counts them.
+    pub members: Option<u64>,
+    pub online: Option<u64>,
+    /// When it was made, from its id, in Unix milliseconds.
+    pub created_ms: u64,
+}
+
+/// What Discord answered for a server tag's card: the server's profile, none
+/// for a server that shows it only to its members, or why it failed.
+pub type TagServerAnswer = Result<Option<TagServer>, String>;
+
 /// A Discord server joined by an invite.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JoinedServer {
@@ -2950,6 +3029,16 @@ pub enum DiscordCommand {
         place: String,
         change: NotificationChange,
     },
+    /// Mark a Discord channel, by its room id, unread after the message
+    /// `last`, a snowflake, with `mentions` of the messages after it calling
+    /// on this account, in Yapfast and with `sync` on Discord, as Mark
+    /// Unread in a message's menu does.
+    MarkUnread {
+        room: String,
+        last: u64,
+        mentions: u64,
+        sync: bool,
+    },
     /// Join a Discord thread, by its room id, or leave it with `join`
     /// false, from the menu Discord's client names `location`; snapshots
     /// show it once Discord confirms it, and a failure comes back as
@@ -3182,10 +3271,13 @@ pub enum DiscordCommand {
     /// the other person in a DM. It comes back as [`Event::Profile`], and
     /// the effect it names as [`Event::ProfileEffect`] when `effect` asks
     /// for it; without, the shop isn't asked what the effect is made of.
+    /// Its frame comes with it, or as [`Event::ProfileFrame`] the first time,
+    /// when `frame` asks for it.
     Profile {
         room: String,
         user: String,
         effect: bool,
+        frame: bool,
     },
     /// Download server icons and avatars by address. Each that arrives comes
     /// back as [`Event::Picture`]; one that fails doesn't.
@@ -3294,6 +3386,11 @@ pub enum DiscordCommand {
     /// its members are online, and whether Discover lists it.
     /// [`Event::ServerPreview`] follows.
     ServerPreview {
+        server: String,
+    },
+    /// The profile of the server a server tag is from, for the tag's card.
+    /// [`Event::TagServer`] follows.
+    TagServer {
         server: String,
     },
     /// What Stickers asks of Discord; [`Event::StickersChanged`] follows.
@@ -4124,6 +4221,12 @@ pub enum Event {
     },
     /// The layers of a profile effect a [`Profile::effect`] names.
     ProfileEffect(Arc<ProfileEffect>),
+    /// The layers of the frame of `user`'s profile, which the shop
+    /// described after [`Event::Profile`] came.
+    ProfileFrame {
+        user: String,
+        frame: Arc<[ProfileFrameLayer]>,
+    },
     /// The Activity panel's feed, in Discord's order; empty if it can't be had.
     ActivityFeed(Arc<[FeedEntry]>),
     /// It's time to ask for the Activity panel's feed again.
@@ -4416,6 +4519,12 @@ pub enum Event {
     ServerPreview {
         server: String,
         result: Result<ServerPreview, String>,
+    },
+    /// What a server tag's card shows of the server it's from, as
+    /// [`DiscordCommand::TagServer`] asked.
+    TagServer {
+        server: String,
+        result: TagServerAnswer,
     },
     /// Whether what Emoji asked of Discord went, uploading or not, and the
     /// server's emoji after it, when Discord sent them.
@@ -5163,8 +5272,10 @@ pub struct Alert {
 }
 
 /// What woke the actor. Each network's own events are handled by its module.
-// One lives at a time, on the actor's stack, so boxing would only add allocations.
-#[allow(clippy::large_enum_variant)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one lives at a time, on the actor's stack, so boxing would only add allocations"
+)]
 enum Wake {
     Command(Option<Command>),
     Voice(bool),
@@ -5212,7 +5323,10 @@ pub async fn run(
             ),
             #[cfg(not(feature = "discord"))]
             Start::Restore => Some("This build of Yapfast has no networks."),
-            #[allow(unreachable_patterns)]
+            #[allow(
+                unreachable_patterns,
+                reason = "reached in builds without one of the networks"
+            )]
             _ => None,
         };
         if let Some(refused) = refused {

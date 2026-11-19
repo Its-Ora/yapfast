@@ -1,5 +1,6 @@
 //! Discord's HTTP API, called the way the web client calls it.
 
+use std::fmt::Write as _;
 use std::sync::RwLock;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -12,7 +13,6 @@ use crate::{
     client,
     limits::{self, Limits, Refusals, Stopped},
     mfa, scheduled_event,
-    settings::{self, CustomStatus},
 };
 
 const API: &str = "https://discord.com/api/v9";
@@ -186,6 +186,28 @@ impl Refused {
     }
 }
 
+/// Part of a file from [`Api::download_part`], its bytes as they arrive.
+pub struct FilePart<S> {
+    /// Where its bytes start in the file: 0 when the server sent the whole
+    /// file in place of the part asked for.
+    pub start: u64,
+    /// The whole file's size, when the server says.
+    pub size: Option<u64>,
+    pub chunks: S,
+}
+
+/// A `Content-Range` header's first byte and the file's whole size, when it
+/// gives one: `bytes 100-199/1000` or `bytes 100-199/*`.
+fn content_range(value: &str) -> Option<(u64, Option<u64>)> {
+    let (range, size) = value.strip_prefix("bytes ")?.split_once('/')?;
+    let start = range.split_once('-')?.0.trim().parse().ok()?;
+    let size = match size.trim() {
+        "*" => None,
+        size => Some(size.parse().ok()?),
+    };
+    Some((start, size))
+}
+
 /// A download larger than it was allowed to be.
 #[derive(Debug)]
 pub struct TooLarge;
@@ -264,7 +286,7 @@ pub struct Api {
     /// Empty without a login; Discord may refresh it in READY.
     token: RwLock<String>,
     /// The API's base URL: Discord's, or the test server's.
-    base: String,
+    pub(crate) base: String,
     limits: Limits,
     refusals: Refusals,
     /// Downloads going at once, so opening the emoji picker or a busy channel
@@ -387,10 +409,12 @@ impl Api {
 
     /// Asks with `token` from now on: Discord refreshed the login to it.
     pub fn relogin(&self, token: &str) {
-        *self
-            .token
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = token.to_owned();
+        token.clone_into(
+            &mut self
+                .token
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
     }
 
     /// Trades a remote login's ticket for the login, encrypted with the key
@@ -500,11 +524,14 @@ impl Api {
     /// Up to [`PAGE`] messages of a channel, newest first, as [`Span`] says.
     pub async fn messages(&self, channel: &str, span: Span<'_>) -> Result<Vec<Value>> {
         let mut path = format!("/channels/{channel}/messages?limit={PAGE}");
-        match span {
-            Span::Latest => {}
-            Span::Before(id) => path.push_str(&format!("&before={id}")),
-            Span::After(id) => path.push_str(&format!("&after={id}")),
-            Span::Around(id) => path.push_str(&format!("&around={id}")),
+        let from = match span {
+            Span::Latest => None,
+            Span::Before(id) => Some(("before", id)),
+            Span::After(id) => Some(("after", id)),
+            Span::Around(id) => Some(("around", id)),
+        };
+        if let Some((side, id)) = from {
+            let _ = write!(path, "&{side}={id}");
         }
         match self.json(self.request(Method::GET, &path)).await? {
             Value::Array(messages) => Ok(messages),
@@ -654,7 +681,7 @@ impl Api {
             "/users/{user}/profile?with_mutual_guilds=true&with_mutual_friends=true&with_mutual_friends_count=false"
         );
         if let Some(guild) = guild {
-            path.push_str(&format!("&guild_id={guild}"));
+            let _ = write!(path, "&guild_id={guild}");
         }
         self.json(self.request(Method::GET, &path)).await
     }
@@ -665,7 +692,7 @@ impl Api {
         let mut path =
             "/content-inventory/users/@me?for_game_profile=false&feature=inbox".to_owned();
         if let Some(token) = refresh_token {
-            path.push_str(&format!("&refresh_token={}", encode(token)));
+            let _ = write!(path, "&refresh_token={}", encode(token));
         }
         self.json(self.request(Method::GET, &path)).await
     }
@@ -739,27 +766,6 @@ impl Api {
 
     /// The message that each of up to 25 message requests is waiting with,
     /// as Discord's requests list shows it: `[{channel_id, message_preview}]`.
-    /// Fork: the accounts linked to this one (Spotify, Steam...).
-    pub async fn connections(&self) -> Result<Value> {
-        self.json(self.request(Method::GET, "/users/@me/connections"))
-            .await
-    }
-
-    /// Fork: an access token for the linked Spotify account by this id, as
-    /// Discord's client asks for one to show and control what it plays.
-    pub async fn spotify_token(&self, id: &str) -> Result<String> {
-        let answer = self
-            .json(self.request(
-                Method::GET,
-                &format!("/users/@me/connections/spotify/{id}/access-token"),
-            ))
-            .await?;
-        answer["access_token"]
-            .as_str()
-            .map(str::to_owned)
-            .context("Discord gave no Spotify access token")
-    }
-
     /// Fork: a call to Spotify's Web API with that token: its status and
     /// what it answered, if JSON.
     pub(crate) async fn spotify(
@@ -906,6 +912,18 @@ impl Api {
             .map(drop)
     }
 
+    /// Marks a channel unread from the message after `message`, with
+    /// `mentions` of those after it calling on this account, as Mark Unread
+    /// in Discord's client does: a manual acknowledgement, which Discord
+    /// sends back as `MESSAGE_ACK` with `manual`.
+    pub async fn ack_manual(&self, channel: &str, message: &str, mentions: u64) -> Result<()> {
+        let path = format!("/channels/{channel}/messages/{message}/ack");
+        let body = json!({"manual": true, "mention_count": mentions});
+        self.json(with_json(self.request(Method::POST, &path), &body))
+            .await
+            .map(drop)
+    }
+
     /// Marks channels read, each up to its message, in one request, as the
     /// official client does for a whole server; at most [`ACK_BULK_LIMIT`].
     pub async fn ack_bulk(&self, reads: &[(String, String)]) -> Result<()> {
@@ -964,7 +982,7 @@ impl Api {
             encode(emoji)
         );
         if let Some(after) = after {
-            path.push_str(&format!("&after={after}"));
+            let _ = write!(path, "&after={after}");
         }
         match self.json(self.request(Method::GET, &path)).await? {
             Value::Array(users) => Ok(users),
@@ -1001,7 +1019,7 @@ impl Api {
         let mut path =
             format!("/channels/{channel}/polls/{message}/answers/{answer}?limit={limit}");
         if let Some(after) = after {
-            path.push_str(&format!("&after={after}"));
+            let _ = write!(path, "&after={after}");
         }
         match self.json(self.request(Method::GET, &path)).await? {
             Value::Object(mut answer) => match answer.remove("users") {
@@ -1085,9 +1103,9 @@ impl Api {
     ) -> Result<Value> {
         let mut query = String::new();
         for (name, value) in params {
-            query.push_str(&format!("{name}={}&", encode(value)));
+            let _ = write!(query, "{name}={}&", encode(value));
         }
-        query.push_str(&format!("offset={offset}"));
+        let _ = write!(query, "offset={offset}");
         let path = match guild {
             Some(guild) => format!("/guilds/{guild}/messages/search?{query}"),
             None => format!("/channels/{channel}/messages/search?{query}"),
@@ -1218,17 +1236,6 @@ impl Api {
             .await
     }
 
-    /// Sets the custom status, or clears it with `None`, in the account's settings.
-    pub async fn set_custom_status(&self, custom: Option<&CustomStatus>) -> Result<()> {
-        let body = json!({"settings": settings::write_custom(custom)});
-        self.json(with_json(
-            self.request(Method::PATCH, "/users/@me/settings-proto/1"),
-            &body,
-        ))
-        .await
-        .map(drop)
-    }
-
     /// The GIF picker's home: trending terms, each with a GIF, and trending GIFs.
     pub async fn gifs_trending(&self) -> Result<Value> {
         let path = format!(
@@ -1316,27 +1323,20 @@ impl Api {
         .map(drop)
     }
 
-    /// Sets the status: `online`, `idle`, `dnd` or `invisible`.
-    pub async fn set_status(&self, status: &str) -> Result<()> {
-        let body = json!({"settings": settings::write_status(status)});
-        self.json(with_json(
-            self.request(Method::PATCH, "/users/@me/settings-proto/1"),
-            &body,
-        ))
-        .await
-        .map(drop)
+    /// The services linked to this account, as READY's `connected_accounts`.
+    pub(crate) async fn connections(&self) -> Result<Value> {
+        self.json(self.request(Method::GET, "/users/@me/connections"))
+            .await
     }
 
-    /// Shares the game this account plays, everywhere it's signed in, or
-    /// stops sharing it.
-    pub async fn set_show_game(&self, shown: bool) -> Result<()> {
-        let body = json!({"settings": settings::write_show_game(shown)});
-        self.json(with_json(
-            self.request(Method::PATCH, "/users/@me/settings-proto/1"),
-            &body,
-        ))
-        .await
-        .map(drop)
+    /// A token for the linked Spotify account `id`, which Discord renews.
+    pub(crate) async fn spotify_access_token(&self, id: &str) -> Result<String> {
+        let path = format!("/users/@me/connections/spotify/{}/access-token", encode(id));
+        let answer = self.json(self.request(Method::GET, &path)).await?;
+        answer["access_token"]
+            .as_str()
+            .map(str::to_owned)
+            .context("Discord's answer had no token")
     }
 
     /// Ignores a friend request, cancels one, or ends a friendship.
@@ -1504,8 +1504,8 @@ impl Api {
         Ok(answer["phone"].as_str().unwrap_or_default().to_owned())
     }
 
-    /// A server's profile, as its settings' Server Profile page shows it:
-    /// its name, icon and description, among more.
+    /// A server's profile, as its settings' Server Profile page and a server
+    /// tag's card show it: its name, icon and description, among more.
     pub async fn server_profile(&self, guild: &str) -> Result<Value> {
         let path = format!("/guilds/{guild}/profile");
         self.json(self.request(Method::GET, &path)).await
@@ -1540,7 +1540,7 @@ impl Api {
     pub async fn bans(&self, guild: &str, after: Option<&str>) -> Result<Value> {
         let mut path = format!("/guilds/{guild}/bans?limit={BANS_PAGE}");
         if let Some(after) = after {
-            path.push_str(&format!("&after={after}"));
+            let _ = write!(path, "&after={after}");
         }
         self.json(self.request(Method::GET, &path)).await
     }
@@ -1555,10 +1555,10 @@ impl Api {
     ) -> Result<Value> {
         let mut path = format!("/guilds/{guild}/bans/search?limit=10");
         if let Some(query) = query {
-            path.push_str(&format!("&query={}", encode(query)));
+            let _ = write!(path, "&query={}", encode(query));
         }
         for id in user_ids {
-            path.push_str(&format!("&user_ids={}", encode(id)));
+            let _ = write!(path, "&user_ids={}", encode(id));
         }
         self.json(self.request(Method::GET, &path)).await
     }
@@ -1582,13 +1582,13 @@ impl Api {
     ) -> Result<Value> {
         let mut path = format!("/guilds/{guild}/audit-logs?limit={AUDIT_PAGE}");
         if let Some(before) = before {
-            path.push_str(&format!("&before={}", encode(before)));
+            let _ = write!(path, "&before={}", encode(before));
         }
         if let Some(user) = user {
-            path.push_str(&format!("&user_id={}", encode(user)));
+            let _ = write!(path, "&user_id={}", encode(user));
         }
         if let Some(action) = action {
-            path.push_str(&format!("&action_type={action}"));
+            let _ = write!(path, "&action_type={action}");
         }
         self.json(self.request(Method::GET, &path)).await
     }
@@ -1961,7 +1961,7 @@ impl Api {
             encode(code)
         );
         if let Some(typed) = typed {
-            path.push_str(&format!("&inputValue={}", encode(typed)));
+            let _ = write!(path, "&inputValue={}", encode(typed));
         }
         self.json(self.request(Method::GET, &path)).await
     }
@@ -2266,9 +2266,80 @@ impl Api {
         Ok(size)
     }
 
+    /// Asks Discord's CDN or media proxy for a file's bytes from `from`, up
+    /// to `to` when given, as a browser asks for the part of a video it
+    /// plays: an HTTP Range request. A server that doesn't take ranges sends
+    /// the whole file, which [`FilePart::start`] tells. Refuses a file over
+    /// `limit` bytes.
+    pub async fn download_part(
+        &self,
+        url: &str,
+        from: u64,
+        to: Option<u64>,
+        limit: u64,
+    ) -> Result<
+        FilePart<
+            impl futures_util::Stream<Item = Result<impl std::ops::Deref<Target = [u8]> + Send + use<>>>
+            + Send
+            + Unpin
+            + use<>,
+        >,
+    > {
+        allowed(url)?;
+        let range = match to {
+            Some(to) => format!("bytes={from}-{}", to.saturating_sub(1)),
+            None => format!("bytes={from}-"),
+        };
+        let response = self
+            .send_file(self.http.get(url).header(header::RANGE, range))
+            .await?;
+        let (start, size) = if response.status() == StatusCode::PARTIAL_CONTENT {
+            response
+                .headers()
+                .get(header::CONTENT_RANGE)
+                .and_then(|value| content_range(value.to_str().ok()?))
+                .context("Discord sent part of the file without saying which")?
+        } else {
+            (0, response.content_length())
+        };
+        if size.is_some_and(|size| size > limit) {
+            return Err(TooLarge.into());
+        }
+        let stall = self.stall;
+        let chunks =
+            futures_util::stream::unfold(Some((response, start)), move |state| async move {
+                let (mut response, at) = state?;
+                match tokio::time::timeout(stall, response.chunk()).await {
+                    Err(_) => Some((Err(Stalled.into()), None)),
+                    Ok(Err(error)) => Some((
+                        Err(anyhow::Error::new(error).context("the download stopped")),
+                        None,
+                    )),
+                    Ok(Ok(None)) => None,
+                    Ok(Ok(Some(chunk))) => {
+                        let at = at + chunk.len() as u64;
+                        if at > limit {
+                            return Some((Err(TooLarge.into()), None));
+                        }
+                        Some((Ok(chunk), Some((response, at))))
+                    }
+                }
+            });
+        Ok(FilePart {
+            start,
+            size,
+            chunks: Box::pin(chunks),
+        })
+    }
+
     /// Asks for a file, giving up if Discord doesn't answer within [`STALL`].
     async fn get_file(&self, url: &str) -> Result<Response> {
-        let response = tokio::time::timeout(self.stall, self.http.get(url).send())
+        self.send_file(self.http.get(url)).await
+    }
+
+    /// Sends a request for a file as [`Self::get_file`] does.
+    async fn send_file(&self, request: RequestBuilder) -> Result<Response> {
+        let response = tokio::time::timeout(self.stall, request.send())
             .await
             .map_err(|_| Stalled)?
             .context("could not reach Discord")?;
@@ -2425,6 +2496,9 @@ fn refusal(status: StatusCode, body: &Value) -> anyhow::Error {
         (_, Some(UNKNOWN_INVITE | INVALID_INVITE)) => {
             anyhow!("This invite is invalid or has expired.")
         }
+        (StatusCode::NOT_FOUND, Some(INVALID_REMOTE_AUTH_TICKET)) => {
+            anyhow!("Discord rejected the QR sign-in ticket. Try again with a new code.")
+        }
         (_, Some(BANNED)) => anyhow!("You're banned from this server."),
         (_, Some(TOO_MANY_SERVERS)) => {
             anyhow!("You're in as many servers as Discord allows. Leave one to join another.")
@@ -2535,6 +2609,7 @@ const ALREADY_FRIENDS: u64 = 80007;
 const UNKNOWN_APPLICATION: u64 = 10002;
 const UNKNOWN_INVITE: u64 = 10006;
 const INVALID_INVITE: u64 = 50020;
+const INVALID_REMOTE_AUTH_TICKET: u64 = 20042;
 const BANNED: u64 = 40007;
 const TOO_MANY_SERVERS: u64 = 30001;
 const SERVER_FULL: u64 = 30019;
@@ -2671,7 +2746,7 @@ fn encode(segment: &str) -> String {
         if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
             encoded.push(byte as char);
         } else {
-            encoded.push_str(&format!("%{byte:02X}"));
+            let _ = write!(encoded, "%{byte:02X}");
         }
     }
     encoded

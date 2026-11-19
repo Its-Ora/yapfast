@@ -34,11 +34,8 @@ jobs:
           github_access_token: ${{ github.token }}
       - uses: actions/cache@v4
         with:
-          path: |
-            ~/.cache/cargo-xwin
-            .local/windows/skia-static-production/build.json
-            .local/windows/skia-static-production/prepared
-          key: windows-skia-${{ hashFiles('nix/flake.lock', 'nix/prepare-windows-skia.py', 'nix/prepare-skia-native.py', 'nix/skia-windows-builder/**') }}
+          path: ~/.cache/cargo-xwin
+          key: windows-xwin-${{ hashFiles('nix/flake.lock') }}
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
