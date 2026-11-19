@@ -41,6 +41,8 @@ pub struct Rail {
     pub home: Home,
     pub items: Vec<RailItem>,
     pub scroll: crate::sync::Scroll,
+    /// Fork: the servers and folders hidden show too, faded, after Show All.
+    pub show_all: bool,
 }
 
 /// The rail, down the window's left edge.
@@ -61,6 +63,7 @@ impl Rail {
             home: Home::default(),
             items: Vec::new(),
             scroll: crate::sync::Scroll::new(height),
+            show_all: false,
         }
     }
 }
@@ -74,6 +77,8 @@ pub const GAP: f32 = 8.0;
 const RADIUS: f32 = 12.0;
 /// The add-a-server tile's id, and the disc and plus drawn on it.
 const ADD: &str = "+";
+/// Fork: the Show All tile's id.
+const SHOW_ALL: &str = "fork-show-all";
 const ADD_DISC: f32 = 18.0;
 const ADD_PLUS: u32 = 14;
 const FOLDER_RADIUS: f32 = 16.0;
@@ -87,6 +92,8 @@ const FOLDER_COLOR: u32 = 0x5865f2;
 const PILL_OPEN: f32 = 40.0;
 const PILL_POINTED: f32 = 20.0;
 const PILL_UNREAD: f32 = 8.0;
+/// Fork: an unread server gets no pill; its mentions still get a badge.
+const FORK_UNREAD_PILL: bool = false;
 /// A server's tooltip lists this many busy voice channels at most, each
 /// with this many faces, and counts the rest.
 const CARD_ROOMS: usize = 4;
@@ -103,6 +110,8 @@ pub enum Event {
     Home,
     Server(String),
     Folder(String),
+    /// Fork: the hidden servers and folders show, or hide again.
+    ShowAll,
     /// An unread DM on the rail opens.
     Dm(String),
     Join,
@@ -142,6 +151,9 @@ pub enum Kind {
     },
     /// Discord's "Add a server" tile, after the last server.
     Add,
+    /// Fork: Show All, at the rail's bottom while servers or folders are
+    /// hidden: whether they show now.
+    ShowAll(bool),
 }
 
 /// One row of the rail.
@@ -165,6 +177,8 @@ pub struct RailItem {
     pub busy: Busy,
     /// Out of reach in a Discord outage, shown faded.
     pub unavailable: bool,
+    /// Fork: hidden, shown faded after Show All.
+    pub hidden: bool,
 }
 
 /// A server's voice channels with people in them, in its channel list's
@@ -214,6 +228,7 @@ impl RailItem {
             media: marks.media,
             busy: marks.busy,
             unavailable: server.unavailable,
+            hidden: false,
         }
     }
 
@@ -225,7 +240,7 @@ impl RailItem {
             Kind::Folder { open: true, .. } => FOLDER + 4.0,
             Kind::Folder { open: false, .. } => FOLDER + GAP,
             Kind::Nested { last, .. } => TILE + if *last { 4.0 } else { 0.0 } + GAP,
-            Kind::Server | Kind::Dm | Kind::Add => TILE + GAP,
+            Kind::Server | Kind::Dm | Kind::Add | Kind::ShowAll(_) => TILE + GAP,
         }
     }
 }
@@ -257,7 +272,12 @@ pub fn home(state: &AppState) -> Home {
 /// The rail's rows, from the core's state: the unread DMs (in the core's
 /// order, latest first), a line, then each server, and each folder with its
 /// servers after it while it's open.
-pub fn rail(state: &AppState, open_folders: &BTreeSet<String>) -> Vec<RailItem> {
+pub fn rail(
+    state: &AppState,
+    open_folders: &BTreeSet<String>,
+    hidden_rail: &BTreeSet<String>,
+    show_all: bool,
+) -> Vec<RailItem> {
     let rooms: HashMap<&str, &Arc<ChatRoom>> = state
         .rooms
         .iter()
@@ -286,6 +306,7 @@ pub fn rail(state: &AppState, open_folders: &BTreeSet<String>) -> Vec<RailItem> 
             media: None,
             busy: Busy::default(),
             unavailable: false,
+            hidden: false,
         })
         .collect();
     items.push(RailItem {
@@ -300,6 +321,7 @@ pub fn rail(state: &AppState, open_folders: &BTreeSet<String>) -> Vec<RailItem> 
         media: None,
         busy: Busy::default(),
         unavailable: false,
+        hidden: false,
     });
     let call = state
         .voice
@@ -363,11 +385,20 @@ pub fn rail(state: &AppState, open_folders: &BTreeSet<String>) -> Vec<RailItem> 
         marks
     };
     let selected = |server: &ChatServer| state.navigation == Navigation::Server(server.id.clone());
+    // Fork: what's hidden stays off the rail, unless Show All shows it;
+    // the server open shows all the same.
+    let mut any_hidden = false;
     let mut servers = state.servers.iter().peekable();
     while let Some(server) = servers.next() {
         let Some(folder) = &server.folder else {
+            let off = hidden_rail.contains(&server.id);
+            any_hidden |= off;
+            if off && !show_all && !selected(server) {
+                continue;
+            }
             items.push(RailItem {
                 call: in_call(server),
+                hidden: off,
                 ..RailItem::server(server, selected(server), marks(server))
             });
             continue;
@@ -375,6 +406,17 @@ pub fn rail(state: &AppState, open_folders: &BTreeSet<String>) -> Vec<RailItem> 
         let mut inside = vec![server];
         while let Some(next) = servers.next_if(|next| next.folder.as_ref() == Some(folder)) {
             inside.push(next);
+        }
+        let folder_off = hidden_rail.contains(&folder.id);
+        any_hidden |= folder_off || inside.iter().any(|server| hidden_rail.contains(&server.id));
+        if !show_all {
+            if folder_off && !inside.iter().any(|server| selected(server)) {
+                continue;
+            }
+            inside.retain(|server| !hidden_rail.contains(&server.id) || selected(server));
+            if inside.is_empty() {
+                continue;
+            }
         }
         let open = open_folders.contains(&folder.id);
         let tint = folder.color.unwrap_or(FOLDER_COLOR);
@@ -418,6 +460,7 @@ pub fn rail(state: &AppState, open_folders: &BTreeSet<String>) -> Vec<RailItem> 
             media: call.then(call_media),
             busy: Busy::default(),
             unavailable: false,
+            hidden: folder_off,
         });
         if open {
             let last = inside.len() - 1;
@@ -428,6 +471,7 @@ pub fn rail(state: &AppState, open_folders: &BTreeSet<String>) -> Vec<RailItem> 
                         last: index == last,
                     },
                     call: in_call(server),
+                    hidden: hidden_rail.contains(&server.id),
                     ..RailItem::server(server, selected(server), marks(server))
                 });
             }
@@ -446,6 +490,28 @@ pub fn rail(state: &AppState, open_folders: &BTreeSet<String>) -> Vec<RailItem> 
             media: None,
             busy: Busy::default(),
             unavailable: false,
+            hidden: false,
+        });
+    }
+    if any_hidden {
+        items.push(RailItem {
+            id: SHOW_ALL.into(),
+            name: if show_all {
+                "Hide hidden servers"
+            } else {
+                "Show All"
+            }
+            .into(),
+            icon: None,
+            kind: Kind::ShowAll(show_all),
+            selected: false,
+            unread: false,
+            badge: String::new(),
+            call: false,
+            media: None,
+            busy: Busy::default(),
+            unavailable: false,
+            hidden: false,
         });
     }
     items
@@ -548,7 +614,22 @@ pub fn update(app: &mut App, event: Event) -> Task<Message> {
                 app.layout.open_folders.insert(id);
             }
             crate::layout::store(app.client.root(), "open_folders", &app.layout.open_folders);
-            app.rail.items = rail(app.client.state(), &app.layout.open_folders);
+            app.rail.items = rail(
+                app.client.state(),
+                &app.layout.open_folders,
+                &app.layout.hidden_rail,
+                app.rail.show_all,
+            );
+            return app.ask();
+        }
+        Event::ShowAll => {
+            app.rail.show_all = !app.rail.show_all;
+            app.rail.items = rail(
+                app.client.state(),
+                &app.layout.open_folders,
+                &app.layout.hidden_rail,
+                app.rail.show_all,
+            );
             return app.ask();
         }
         Event::Dm(id) => app.client.dispatch(Action::Open(id)),
@@ -680,7 +761,11 @@ impl<'a> View<'a> {
     fn server_face(self, item: &RailItem, lit: bool) -> Element<'a, Message> {
         let theme = self.cx.look.theme;
         let side = TILE as u32;
-        let opacity = if item.unavailable { 0.5 } else { 1.0 };
+        let opacity = if item.unavailable || item.hidden {
+            0.5
+        } else {
+            1.0
+        };
         if let Some(picture) = item
             .icon
             .as_deref()
@@ -794,6 +879,11 @@ impl<'a> View<'a> {
                 Message::Rail(Event::Dm(item.id.clone())),
             ),
             Kind::Add => (self.add_face(pointed), TILE, Message::Rail(Event::Join)),
+            Kind::ShowAll(shown) => (
+                self.glyph_tile(if *shown { Icon::EyeOff } else { Icon::Eye }, pointed),
+                TILE,
+                Message::Rail(Event::ShowAll),
+            ),
             _ => (
                 self.server_face(item, lit),
                 TILE,
@@ -811,7 +901,7 @@ impl<'a> View<'a> {
                 .map(|media| (media, item.call)),
             pointed,
             open_folder,
-            menu: item.kind != Kind::Add,
+            menu: !matches!(item.kind, Kind::Add | Kind::ShowAll(_)),
         };
         // A server out of reach in a Discord outage says so, besides
         // fading.
@@ -877,7 +967,7 @@ impl<'a> View<'a> {
             PILL_OPEN
         } else if marks.pointed {
             PILL_POINTED
-        } else if marks.unread {
+        } else if marks.unread && FORK_UNREAD_PILL {
             PILL_UNREAD
         } else {
             0.0

@@ -45,6 +45,11 @@ impl Settings {
                 self.blocked_shown += BLOCKED_STEP;
                 return;
             }
+            AccountEvent::ToggleBlocked => {
+                self.blocked_open = !self.blocked_open;
+                self.blocked_shown = BLOCKED_STEP;
+                return;
+            }
             AccountEvent::Open(page) => {
                 crate::browser::open(page);
                 return;

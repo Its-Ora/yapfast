@@ -101,6 +101,25 @@ pub enum SideRow {
     Room(Box<Room>),
     /// What the list says when it has no rows.
     Empty(&'static str),
+    /// Fork: a DM group's heading, its DMs after it unless folded; the
+    /// name typed while it's renamed (`fork::dm_groups`).
+    ForkGroup {
+        id: String,
+        name: String,
+        tint: u32,
+        collapsed: bool,
+        count: usize,
+        editing: Option<String>,
+    },
+    /// Fork: the heading over the DMs in no group.
+    ForkOthers,
+    /// Fork: the heading over the servers a DM search found, and one.
+    ForkServersHeading,
+    ForkServer {
+        id: String,
+        name: String,
+        icon: Option<String>,
+    },
 }
 
 impl SideRow {
@@ -114,6 +133,10 @@ impl SideRow {
             SideRow::Heading { fold, .. } => format!("heading:{fold}"),
             SideRow::Room(room) => room.id.clone(),
             SideRow::Empty(_) => "empty".into(),
+            SideRow::ForkGroup { id, .. } => format!("{}{id}", crate::fork::dm_groups::GROUP),
+            SideRow::ForkOthers => "fork-others".into(),
+            SideRow::ForkServersHeading => "fork-servers".into(),
+            SideRow::ForkServer { id, .. } => format!("fork-server:{id}"),
         }
     }
 
@@ -135,6 +158,10 @@ impl SideRow {
                     }
             }
             SideRow::Empty(_) => 40.0,
+            SideRow::ForkGroup { .. } | SideRow::ForkOthers | SideRow::ForkServersHeading => {
+                HEADING
+            }
+            SideRow::ForkServer { .. } => DM_ROW,
         }
     }
 }

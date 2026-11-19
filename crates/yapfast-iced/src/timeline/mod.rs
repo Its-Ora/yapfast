@@ -329,6 +329,8 @@ pub enum Event {
     /// The banner's Mark as read.
     MarkRead,
     JumpPresent,
+    /// Fork: the round button's way back to the newest message.
+    ToEnd,
     JumpFaded(String),
     /// A spoiler's cover over a message's attachment was clicked: the
     /// message by its item, the attachment's index.
@@ -383,6 +385,7 @@ pub fn update(app: &mut App, event: Event) -> Task<Message> {
             }
             app.sync()
         }
+        Event::ToEnd => crate::timeline::scroll::go_to_end(app),
         Event::JumpPresent => {
             app.timeline.latest_due = true;
             app.client.dispatch(Action::JumpToPresent);

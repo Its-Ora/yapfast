@@ -26,11 +26,12 @@ fn the_picker_finds_every_emoji_by_id_and_says_which_it_may_use() {
         })],
         ..Default::default()
     }));
-    // Without Nitro, another server's emoji are found, locked.
+    // Without Nitro, another server's emoji are found; the fork unlocks
+    // them, sent as their pictures' links.
     let found = app.emoji_by_id(&["6", "7"].into_iter().collect());
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].text, ":party:");
-    assert!(found[0].animated && !found[0].usable);
+    assert!(found[0].animated && found[0].usable);
     assert!(found[0].picture.contains("/emojis/6"));
 }
 
@@ -1072,7 +1073,8 @@ fn another_servers_emoji_and_stickers_need_the_channels_leave() {
     );
     assert_eq!(
         other_usable(&mut app, "discord:10:22"),
-        (Some(false), Some(false)),
+        // Fork: emoji stay usable, sent as their pictures' links.
+        (Some(true), Some(false)),
         "not where it denies Use External Emojis and Stickers, Nitro or not"
     );
 }

@@ -124,6 +124,34 @@ pub(crate) fn timeline<'a>(ctx: crate::ctx::Ctx<'a>) -> Element<'a, Message> {
                 .align_y(Alignment::End),
         );
     }
+    // Fork: scrolled well up through the newest messages, a round button
+    // at the bottom right brings the list back to its end in one click.
+    if !ctx.state.detached && !ctx.lanes.timeline.at_end && ctx.lanes.timeline.from_end > 600.0 {
+        let theme = ctx.look.theme;
+        let (rest, lit) = (theme.accent, theme.accent_hover);
+        let down = button(
+            ctx.look
+                .glyph(Icon::ChevronDown, 20, theme.on_accent)
+                .boxed(40),
+        )
+        .padding(0)
+        .width(40)
+        .height(40)
+        .on_press(Message::Timeline(Event::ToEnd))
+        .style(crate::controls::lit_style(Some(rest), lit, 20.0));
+        layers = layers.push(
+            container(down)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding(Padding {
+                    right: 24.0,
+                    bottom: 16.0,
+                    ..Padding::ZERO
+                })
+                .align_x(Alignment::End)
+                .align_y(Alignment::End),
+        );
+    }
     // A press notes where the list is in the window, for the menus and
     // cards its rows open: what's over the list comes and goes.
     crate::widgets::Spot::new(layers, &ctx.lanes.timeline.place).into()

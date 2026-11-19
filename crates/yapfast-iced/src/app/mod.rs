@@ -83,6 +83,8 @@ pub struct App {
     pub timeline: crate::timeline::Timeline,
     /// The server rail, the sidebar beside it and the member list.
     pub rail: crate::rail::Rail,
+    /// Fork: what the fork's own parts hold; see `fork`.
+    pub fork: crate::fork::State,
     pub sidebar: crate::sidebar::Sidebar,
     pub roster: crate::members::Roster,
     pub selected: Option<String>,
@@ -260,6 +262,7 @@ impl App {
             header: Default::default(),
             timeline: crate::timeline::Timeline::new(height, width - navigation),
             rail: crate::rail::Rail::new(height),
+            fork: Default::default(),
             sidebar: crate::sidebar::Sidebar::new(height),
             roster: crate::members::Roster::new(height),
             selected: None,
@@ -397,6 +400,7 @@ impl App {
             Message::Link(link, at) => crate::links::follow_link(self, &link, at),
             Message::Members(event) => crate::members::update(self, event),
             Message::Rail(event) => crate::rail::update(self, event),
+            Message::Fork(event) => crate::fork::update(self, event),
             Message::Side(event) => crate::sidebar::update(self, event),
             Message::Arrange(event) => crate::arrange::update(self, event),
             Message::Account(event) => crate::account::update(self, event),

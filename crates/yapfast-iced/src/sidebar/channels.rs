@@ -119,6 +119,27 @@ impl<'a> super::View<'a> {
             SideRow::Empty(words) => container(text(*words).size(14).color(theme.muted))
                 .padding(8)
                 .into(),
+            SideRow::ForkGroup {
+                id,
+                name,
+                tint,
+                collapsed,
+                count,
+                editing,
+            } => crate::fork::dm_groups::heading(
+                self.cx,
+                id,
+                name,
+                *tint,
+                *collapsed,
+                *count,
+                editing.as_deref(),
+            ),
+            SideRow::ForkOthers => crate::fork::dm_groups::label(self.cx, "OTHER MESSAGES"),
+            SideRow::ForkServersHeading => crate::fork::dm_groups::label(self.cx, "SERVERS"),
+            SideRow::ForkServer { id, name, icon } => {
+                crate::fork::dm_groups::server_row(self.cx, id, name, icon.as_deref())
+            }
         };
         let inset = container(inner)
             .padding(Padding {

@@ -131,7 +131,12 @@ impl App {
     /// again, keeping each that comes out the same.
     fn make_lists(&mut self) {
         let state = self.client.state();
-        let rail = rail(state, &self.layout.open_folders);
+        let rail = rail(
+            state,
+            &self.layout.open_folders,
+            &self.layout.hidden_rail,
+            self.rail.show_all,
+        );
         if self.rail.items != rail {
             self.rail.items = rail;
         }
@@ -150,6 +155,14 @@ impl App {
             &self.layout.collapsed,
             &self.sidebar.filter,
             self.theme.dark,
+        );
+        // Fork: the DM groups, and the servers a DM search finds.
+        let side = crate::fork::dm_groups::arrange(
+            side,
+            state,
+            &self.layout.dm_groups,
+            &self.sidebar.filter,
+            self.fork.renaming.as_ref(),
         );
         if self.sidebar.rows != side {
             self.sidebar.rows = side;
@@ -343,6 +356,8 @@ impl App {
         // Images of pictures the core let go of go too.
         self.win.pictures.prune();
         crate::call::call_sync(self);
+        // Fork: what Spotify plays, for its player.
+        crate::fork::spotify::sync(self);
         {
             let mut cx = crate::ctx::cx!(self);
             tasks.push(self.viewer.sync(&mut cx));

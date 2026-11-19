@@ -78,6 +78,8 @@ pub enum AccountEvent {
     Unlink,
     Unblock(String),
     MoreBlocked,
+    /// Fork: the list of those blocked opens, or folds.
+    ToggleBlocked,
     Open(&'static str),
 }
 

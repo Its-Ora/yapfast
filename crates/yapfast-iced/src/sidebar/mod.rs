@@ -177,6 +177,9 @@ pub const HEADER: f32 = 50.0;
 /// channel, and the gap after each row.
 pub const ROW: f32 = 32.0;
 const DM_ROW: f32 = 42.0;
+/// Fork: a DM's row and a heading, for the fork's rows.
+pub const DM_ROW_HEIGHT: f32 = DM_ROW;
+pub const HEADING_HEIGHT: f32 = HEADING;
 /// The Friends and Requests rows, taller than a channel's.
 const NAV_ROW: f32 = 38.0;
 /// A row's corners.
@@ -307,6 +310,9 @@ pub fn update(app: &mut App, event: Event) -> Task<Message> {
         }
         Event::Toggle(fold) => {
             app.lists_shown = None;
+            if crate::fork::dm_groups::toggle(app, &fold) {
+                return app.sync();
+            }
             let Navigation::Server(server) = app.client.state().navigation.clone() else {
                 return Task::none();
             };

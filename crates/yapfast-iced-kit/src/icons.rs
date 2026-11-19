@@ -230,6 +230,9 @@ pub enum Icon {
     UserX,
     FolderPlus,
     CopyPlus,
+    /// Fork: the Spotify player's buttons.
+    SkipBack,
+    SkipForward,
 }
 
 impl Icon {
@@ -390,6 +393,8 @@ impl Icon {
             Icon::UserX => icon!("user-x.svg"),
             Icon::FolderPlus => icon!("folder-plus.svg"),
             Icon::CopyPlus => icon!("copy-plus.svg"),
+            Icon::SkipBack => icon!("skip-back.svg"),
+            Icon::SkipForward => icon!("skip-forward.svg"),
             Icon::VideoOff => icon!("video-off.svg"),
             Icon::Maximize => icon!("maximize.svg"),
             Icon::Minimize => icon!("minimize.svg"),

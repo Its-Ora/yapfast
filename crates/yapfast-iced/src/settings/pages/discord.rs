@@ -99,6 +99,19 @@ impl<'a> Page<'a> {
                         .color(theme.secondary)
                     ]
                     .spacing(2)
+                    .width(Length::Fill),
+                    // Fork: the list stays folded until asked for.
+                    action(
+                        theme,
+                        if settings.blocked_open {
+                            "Hide blocked accounts"
+                        } else {
+                            "See blocked accounts"
+                        },
+                        Kind::Plain,
+                        Some(account_message(AccountEvent::ToggleBlocked)),
+                    )
+                    .small()
                 ]
                 .spacing(12)
                 .padding(iced::Padding {
@@ -109,7 +122,12 @@ impl<'a> Page<'a> {
             ]
             .spacing(8);
             let mut people = column![];
-            for person in blocked.iter().take(settings.blocked_shown) {
+            let shown = if settings.blocked_open {
+                settings.blocked_shown
+            } else {
+                0
+            };
+            for person in blocked.iter().take(shown) {
                 let mut names = column![
                     text(person.name.as_str())
                         .size(16)
@@ -145,7 +163,7 @@ impl<'a> Page<'a> {
                 );
             }
             list = list.push(people);
-            if count > settings.blocked_shown {
+            if settings.blocked_open && count > settings.blocked_shown {
                 let more = format!("See {} more", count - settings.blocked_shown);
                 list = list.push(Element::from(
                     action(

@@ -130,6 +130,8 @@ fn a_servers_menu_shows_and_changes_its_notifications() {
             "Edit server profile",
             "Leave server",
             "Copy link",
+            // Fork: hides the server from the rail.
+            "Hide server",
         ]
     );
     let shown = rows(&app);

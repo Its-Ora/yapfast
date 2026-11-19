@@ -168,6 +168,12 @@ fn place_menu(
             row
         })
         .collect();
+    // Fork: a server's or a folder's menu hides it from the rail.
+    let mut rows = rows;
+    if !header {
+        crate::fork::hidden::menu_rows(app, id, &mut rows);
+        crate::fork::dm_groups::menu_rows(app, id, &mut rows);
+    }
     if rows.is_empty() {
         return Task::none();
     }

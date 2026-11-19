@@ -103,8 +103,17 @@ pub fn view<'a>(ctx: crate::ctx::Ctx<'a>) -> Option<Element<'a, Message>> {
                 .color(theme.muted),
         );
     }
-    // The status, as the signal, opens the connection's details.
-    let mut words = column![crate::call::details::link_touch(ctx, head, false)];
+    // Fork: the status opens the call's channel, as the line under it
+    // does; the signal beside it still opens the connection's details.
+    let head: Element<'a, Message> = if active {
+        mouse_area(head)
+            .interaction(iced::mouse::Interaction::Pointer)
+            .on_press(Message::Call(Event::OpenCall))
+            .into()
+    } else {
+        head.into()
+    };
+    let mut words = column![head];
     if active {
         words = words.push(detail_line(ctx));
     }

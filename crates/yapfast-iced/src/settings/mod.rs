@@ -183,6 +183,8 @@ pub struct Settings {
     pub record: Option<keybinds::Recording>,
     /// How many people blocked the Discord page lists.
     pub blocked_shown: usize,
+    /// Fork: the Discord page lists those blocked only once asked to.
+    pub blocked_open: bool,
     /// What the desktop says of starting at sign-in and Discord's links,
     /// read as Settings opens and after each change.
     pub platform: Platform,

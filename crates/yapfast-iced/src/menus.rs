@@ -212,6 +212,8 @@ pub enum MenuAct {
     /// Activity tab, and one's own game's privacy.
     AllActivity,
     ActivityPrivacy,
+    /// Fork: the fork's own rows; see `fork`.
+    Fork(crate::fork::Act),
 }
 
 #[derive(Clone)]
@@ -647,6 +649,10 @@ fn carry_out(app: &mut App, row: &MenuRow, ticked: Option<bool>, stays: bool) ->
         | MenuAct::MoveTo => {
             Task::batch([focus, crate::place_menus::sub_act(app, &menu, row, ticked)])
         }
+        MenuAct::Fork(act) => {
+            let place = menu.place.clone().unwrap_or_default();
+            Task::batch([focus, crate::fork::act(app, &place, &row.key, act)])
+        }
         MenuAct::CopyImage
         | MenuAct::SaveMedia
         | MenuAct::CopyMediaLink
@@ -830,7 +836,8 @@ pub fn act(
         | MenuAct::CopyMediaLink
         | MenuAct::OpenMediaLink
         | MenuAct::CopyTextLink
-        | MenuAct::OpenTextLink => focus,
+        | MenuAct::OpenTextLink
+        | MenuAct::Fork(_) => focus,
     }
 }
 

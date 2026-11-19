@@ -39,6 +39,10 @@ pub struct Layout {
     pub custom_themes: Vec<Custom>,
     /// The rail's open folders, by folder id.
     pub open_folders: BTreeSet<String>,
+    /// Fork: the servers and folders hidden from the rail, by id.
+    pub hidden_rail: BTreeSet<String>,
+    /// Fork: the DM list's groups.
+    pub dm_groups: Vec<crate::fork::dm_groups::DmGroup>,
     /// Each server's collapsed categories, by server id: a Discord category
     /// by its room id, any other by its heading.
     pub collapsed: HashMap<String, BTreeSet<String>>,

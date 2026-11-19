@@ -60,6 +60,7 @@ use yapfast_iced_kit::elide;
 use yapfast_iced_kit::field;
 use yapfast_iced_kit::fonts;
 use yapfast_iced_kit::form;
+mod fork;
 mod forum;
 mod forward;
 mod found;

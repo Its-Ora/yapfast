@@ -36,6 +36,10 @@ impl App {
         // across the foot of both.
         let rail = self.theme.rail;
         let mut foot = column![];
+        // Fork: the Spotify player, over the call and the account.
+        if let Some(player) = crate::fork::spotify::view(self.ctx(), &self.fork.spotify) {
+            foot = foot.push(player);
+        }
         if let Some(dock) = crate::call::dock::view(self.ctx()) {
             foot = foot.push(dock);
         }

@@ -49,6 +49,8 @@ pub enum Message {
     Members(crate::members::Event),
     /// The server rail, the sidebar, the account's card.
     Rail(crate::rail::Event),
+    /// Fork: the fork's own parts; see `fork`.
+    Fork(crate::fork::Event),
     Side(crate::sidebar::Event),
     /// A channel or category dragged in the sidebar.
     Arrange(crate::arrange::Event),
